@@ -42,12 +42,19 @@ function render(run) {
       card.append(document.createElement('p'));
       cards.set(info.sessionId, card); $('sessions').append(card);
     }
-    if (info.liveUrl) {
+    if (info.status === 'running' && info.liveUrl) {
       let frame = card.querySelector('iframe');
       if (!frame) { frame = document.createElement('iframe'); frame.title = info.agentId; card.append(frame); }
       const url = new URL(info.liveUrl); url.searchParams.set('readOnly', 'true');
       if (frame.src !== url.href) frame.src = url.href;
+    } else {
+      card.querySelector('iframe')?.remove();
     }
+    if (info.status === 'running' && !info.liveUrl) {
+      let note = card.querySelector('.live-view-note');
+      if (!note) { note = document.createElement('small'); note.className = 'live-view-note'; card.append(note); }
+      note.textContent = 'Live view URL is not available yet; check the session events for details.';
+    } else card.querySelector('.live-view-note')?.remove();
     card.firstChild.textContent = `${info.role} / ${info.agentId} / ${info.sessionId} / ${info.status}`;
   }
 }

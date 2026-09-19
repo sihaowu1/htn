@@ -26,7 +26,7 @@
    ngrok http 127.0.0.1:8080
    ```
 
-   The target needs a reachable public HTTP(S) URL because the cloud browser cannot connect to the app's localhost directly.
+   The app automatically sends ngrok's `ngrok-skip-browser-warning: true` header from Browserbase, so the free-tier warning page should be skipped. If you open the URL manually, append `?ngrok-skip-browser-warning=true` once. The target needs a reachable public HTTP(S) URL because the cloud browser cannot connect to the app's localhost directly.
 
 4. Start our project app and open http://localhost:3000:
 

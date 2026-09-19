@@ -75,6 +75,10 @@ export class BrowserSession {
   async page(startUrl: string) {
     const context = await this.browser.newContext();
     this.contexts.add(context);
+    // Free ngrok endpoints show an interstitial warning to normal browsers.
+    // This header tells ngrok that the request is coming from an automated
+    // client, so discovery and workers see the target site immediately.
+    await context.setExtraHTTPHeaders({ 'ngrok-skip-browser-warning': 'true' });
     const origin = new URL(startUrl).origin;
     await context.route('**/*', async route => {
       const request = route.request();
@@ -99,11 +103,31 @@ export class BrowserSession {
       await this.trace.event('navigation.attempt', { url: startUrl });
       await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await settle(page);
-      try {
-        const debug = await this.sdk.sessions.debug(this.info.sessionId);
-        this.info.liveUrl = debug.pages.find(p => p.url === page.url())?.debuggerFullscreenUrl || debug.debuggerFullscreenUrl;
+      // Use the live view for the actual page created in this context. The
+      // session-level URL can point at Browserbase's default about:blank tab.
+      let liveViewError: unknown;
+      let sessionLiveUrl = '';
+      for (let attempt = 0; attempt < 4 && !this.info.liveUrl; attempt++) {
+        try {
+          const debug = await this.sdk.sessions.debug(this.info.sessionId);
+          sessionLiveUrl = debug.debuggerFullscreenUrl;
+          const pageLiveUrl = debug.pages.find(p => p.url === page.url())?.debuggerFullscreenUrl;
+          if (pageLiveUrl) {
+            this.info.liveUrl = pageLiveUrl;
+            this.publish(this.info);
+          } else if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          liveViewError = error;
+          if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      if (!this.info.liveUrl && sessionLiveUrl) {
+        this.info.liveUrl = sessionLiveUrl;
         this.publish(this.info);
-      } catch (error) { await this.trace.event('session.live_view.failed', { error: String(error) }); }
+      }
+      if (!this.info.liveUrl && liveViewError) {
+        await this.trace.event('session.live_view.failed', { error: String(liveViewError) });
+      }
       return { page, dispose: async () => { await context.close(); this.contexts.delete(context); } };
     } catch (error) { await context.close(); this.contexts.delete(context); throw error; }
   }
