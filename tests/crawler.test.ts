@@ -40,3 +40,25 @@ test('rendered local crawler maps URLs to the worker origin and discovers goal-r
     assert.ok(planRelevantTree(map, 'View 3 televisions in the cart').paths.length >= 1);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('crawler caps children at 5, passes explored behaviors, and records dropped choices as unexplored', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'rendered-crawler-cap-'));
+  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
+  const trace = new Trace(log, { runId: 'crawl', agentId: 'crawler', role: 'crawler' });
+  const seen: any[] = [];
+  const model: Model = { call: async (_trace, _name, schema, _instruction, input: any) => {
+    seen.push(input);
+    const [skipped, ...rest] = input.choices;
+    return schema.parse({ selections: rest.map((choice: { id: string; task: string }) => ({ choiceId: choice.id, task: choice.task, value: '' })),
+      skipped: [{ choiceId: skipped.id, reason: 'repeat of an explored behavior' }], reason: 'all' });
+  } };
+  try {
+    const map = await crawl('https://worker.example/store/', 'Browse', model, trace, new AbortController().signal, () => {}, { states: 3, depth: 1 });
+    const children = (id: string) => map.transitions.filter(transition => transition.from === id);
+    assert.ok(children('s0').filter(transition => transition.status !== 'unexplored').length <= 5);
+    assert.ok(children('s0').some(transition => transition.status === 'unexplored' && /repeat/.test(transition.reason)));
+    assert.ok(children('s0').some(transition => transition.status === 'unexplored' && /5-child limit/.test(transition.reason)));
+    assert.deepEqual(seen[0].alreadyExplored, []);
+    validateMap(map);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

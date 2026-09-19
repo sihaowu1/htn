@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { BrowserSession } from './browser.js';
 import { config } from './config.js';
 import { crawl } from './crawler/index.js';
@@ -82,6 +83,9 @@ export class Runner {
           const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
           run.map = await t.span('discovery', () => crawl(run.targetUrl, run.prompt, model, t, discoverySignal,
             map => { run.map = map; this.publish(run); }));
+          await mkdir('logs', { recursive: true });
+          await writeFile('logs/bestbuy_tree.json', JSON.stringify(run.map, null, 2) + '\n', 'utf8');
+          await system.event('map.saved', { file: 'logs/bestbuy_tree.json' });
         }
         await system.event('pipeline.phase.finished', { phase: 'sitemap_or_crawler', mapStatus: run.map.status });
         return run.map;
