@@ -1,0 +1,32 @@
+{
+  "name": "browser-agent-mvp",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "postinstall": "npm run setup",
+    "dev": "tsx src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "test": "tsx --test tests/*.test.ts",
+    "test:browser": "tsx --test tests/browser.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk": "2.20.0",
+    "@sentry/node": "10.75.0",
+    "dotenv": "18.0.1",
+    "express": "5.2.1",
+    "openai": "7.19.0",
+    "playwright": "1.63.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/node": "22.20.4",
+    "tsx": "4.23.13",
+    "typescript": "5.9.3"
+  }
+}
