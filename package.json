@@ -8,7 +8,7 @@
     "dev": "tsx src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "tsx --test tests/core.test.ts tests/crawler.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts",
+    "test": "tsx --test tests/core.test.ts tests/crawler.test.ts tests/orchestrator.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts",
     "test:browser": "tsx --test tests/browser.test.ts"
   },
   "engines": {

@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { BrowserSession } from './browser.js';
 import { config } from './config.js';
 import { crawl } from './crawler/index.js';
-import { planRelevantTree, pool, validateMap } from './flow.js';
+import { pool, validateMap } from './flow.js';
 import { OpenAIModel } from './model.js';
 import { Observer } from './observer.js';
+import { orchestratePaths } from './orchestrator/index.js';
 import { EventLog, Trace } from './telemetry.js';
 import { type FlowMap, type Run, type Identity } from './types.js';
 import { executeSingleAction, executeTask } from './worker.js';
@@ -87,11 +88,13 @@ export class Runner {
       const createPlan = async (map: FlowMap) => {
         signal.throwIfAborted();
         run.status = 'planning'; this.publish(run);
-        await system.event('pipeline.phase.started', { phase: 'worker_planning' });
-        const plan = planRelevantTree(map, run.prompt);
+        await system.event('pipeline.phase.started', { phase: 'orchestrator' });
+        const orchestrator = trace('orchestrator');
+        const { plan, file } = await orchestrator.span('orchestration', () =>
+          orchestratePaths(map, run.prompt, run.id, model, orchestrator, signal));
         run.plan = plan;
-        await system.event('plan.created', plan);
-        await system.event('pipeline.phase.finished', { phase: 'worker_planning', paths: plan.paths.length });
+        await orchestrator.event('plan.created', { ...plan, file });
+        await system.event('pipeline.phase.finished', { phase: 'orchestrator', paths: plan.paths.length, file });
         return plan;
       };
 
