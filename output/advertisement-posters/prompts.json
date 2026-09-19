@@ -1,0 +1,21 @@
+{
+  "mode": "built-in image_gen",
+  "prompts": [
+    {
+      "name": "vantage-tv",
+      "prompt": "Use case: ads-marketing. Generate ONE finished portrait retail advertisement poster, 2:3 aspect ratio. Part of a coordinated four-poster electronics campaign inspired by the supplied Amazon retail cards: solid background, oversized bold tightly spaced sans-serif heading in upper area, smaller readable supporting copy, enormous premium photorealistic product hero in lower half. Clean generous margins, polished studio lighting, no website chrome, no Amazon or Apple branding, no invented offers, no additional text. Render all specified text exactly. Near-black background with white text. Hero: elegant thin-bezel widescreen OLED TV on two slim feet, screen showing vivid cinematic blue and violet mountain scenery. Text: 'Vantage 55\" 4K OLED TV' as large heading; '★ 4.6 rating'; 'Stunning 4K OLED picture with smart streaming built in.' No price."
+    },
+    {
+      "name": "aeropad-air",
+      "prompt": "Use case: ads-marketing. Generate ONE finished portrait retail advertisement poster, 2:3 aspect ratio. Part of a coordinated four-poster electronics campaign inspired by the supplied Amazon retail cards: solid background, oversized bold tightly spaced sans-serif heading in upper area, smaller readable supporting copy, enormous premium photorealistic product hero in lower half. Clean generous margins, polished studio lighting, no website chrome, no Amazon or Apple branding, no invented offers, no additional text. Render all specified text exactly. Pale lavender background with near-black text. Hero: thin silver tablet with bright abstract blue and coral display, three-quarter angle, paired with a view of its aluminum back. Text: 'AeroPad Air 11' as large heading; '★ 4.7 rating'; 'A bright, lightweight tablet for streaming, notes, and everyday creativity.'; '$599.00' prominently."
+    },
+    {
+      "name": "tidyhome-vacuum",
+      "prompt": "Use case: ads-marketing. Generate ONE finished portrait retail advertisement poster, 2:3 aspect ratio. Part of a coordinated four-poster electronics campaign inspired by the supplied Amazon retail cards: solid background, oversized bold tightly spaced sans-serif heading in upper area, smaller readable supporting copy, enormous premium photorealistic product hero in lower half. Clean generous margins, polished studio lighting, no website chrome, no Amazon or Apple branding, no invented offers, no additional text. Render all specified text exactly. Rich emerald-green background with white text. Hero: premium round dark charcoal robot vacuum with mapping sensor turret, photographed three-quarter overhead, subtle ground shadow. Text: 'TidyHome Robot Vacuum' as large heading; '★ 4.1 rating'; 'Automatic cleaning that maps your whole home.'; '$299.99' prominently."
+    },
+    {
+      "name": "orbit-buds",
+      "prompt": "Use case: ads-marketing. Generate ONE finished portrait retail advertisement poster, 2:3 aspect ratio. Part of a coordinated four-poster electronics campaign inspired by the supplied Amazon retail cards: solid background, oversized bold tightly spaced sans-serif heading in upper area, smaller readable supporting copy, enormous premium photorealistic product hero in lower half. Clean generous margins, polished studio lighting, no website chrome, no Amazon or Apple branding, no invented offers, no additional text. Render all specified text exactly. Pale lavender background with near-black text. Hero: two sculptural white wireless earbuds with silicone tips and short stems floating above an open white charging case, beautifully lit close-up. Text: 'Orbit Buds Pro' as large heading; '★ 4.5 rating'; 'Wireless earbuds with active noise cancellation.'; '$179.99' prominently."
+    }
+  ]
+}
