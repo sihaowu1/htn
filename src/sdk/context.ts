@@ -5,8 +5,8 @@ export class RunContext {
   readonly run_id: string;
   readonly goal: string;
   readonly created_at: string;
-  constructor(goal: string) {
-    this.run_id = randomUUID();
+  constructor(goal: string, runId: string = randomUUID()) {
+    this.run_id = runId;
     this.goal = goal;
     this.created_at = new Date().toISOString();
   }

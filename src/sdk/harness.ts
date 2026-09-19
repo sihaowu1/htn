@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { validateCatalogMetadata } from './catalog.js';
 import { AgentExecutionContext, RunContext } from './context.js';
 import { redact } from './redact.js';
+import { Sentry } from '../telemetry.js';
 import {
   attachArtifactInputSchema,
   emitEventInputSchema,
@@ -32,11 +33,20 @@ import {
 
 export const DEFAULT_MAX_METADATA_BYTES = 32_768;
 
+export interface ArtifactContent {
+  runId: string;
+  agentExecutionId?: string;
+  kind: string;
+  mimeType: string;
+  content: Buffer;
+}
+
 export interface StoreAdapter {
   storeRun(run: Run): Promise<void>;
   storeAgentExecution(execution: AgentExecution): Promise<void>;
   storeEvent(event: Event): Promise<void>;
   storeEventLink(link: EventLink): Promise<void>;
+  storeArtifactContent(input: ArtifactContent): Promise<string>;
   close(): Promise<void>;
 }
 
@@ -61,7 +71,7 @@ export class Harness {
 
   async start_run(raw: StartRunInput): Promise<RunContext> {
     const input = parse(startRunInputSchema, raw, 'start_run input');
-    const ctx = new RunContext(input.goal);
+    const ctx = new RunContext(input.goal, input.run_id);
     await this.adapter.storeRun(ctx.toRun());
     return ctx;
   }
@@ -96,18 +106,34 @@ export class Harness {
     }, 'event envelope');
   }
 
+  private async persist(agentCtx: AgentExecutionContext, event: Event): Promise<Event> {
+    await this.adapter.storeEvent(event);
+    try {
+      Sentry.withScope(scope => {
+        scope.setTags({ runId: agentCtx.run_id, agentId: agentCtx.agent_id,
+          agentExecutionId: agentCtx.agent_execution_id, sessionId: agentCtx.getSessionId() || 'none' });
+        Sentry.logger.info(event.event_type, { run_id: agentCtx.run_id, agent_id: agentCtx.agent_id,
+          agent_execution_id: agentCtx.agent_execution_id, event_id: event.event_id,
+          sequence_number: event.sequence_number, payload: JSON.stringify(event.metadata) });
+        if (/error|failed|failure/.test(event.event_type)) {
+          Sentry.captureException(new Error(event.event_type), { extra: { event } });
+        }
+      });
+    } catch { /* Evidence persistence does not depend on Sentry availability. */ }
+    return event;
+  }
+
   async emit_event(agentCtx: AgentExecutionContext, raw: EmitEventInput): Promise<Event> {
     const input = parse(emitEventInputSchema, raw, 'emit_event input');
     if (input.validate_metadata) validateCatalogMetadata(input.event_type, input.metadata);
     const event = this.buildEvent(agentCtx, input.event_type, input.metadata, input);
-    await this.adapter.storeEvent(event);
-    return event;
+    return this.persist(agentCtx, event);
   }
 
   async record_tool_call(agentCtx: AgentExecutionContext, raw: RecordToolCallInput): Promise<{ started: Event; finished: Event }> {
     const input = parse(recordToolCallInputSchema, raw, 'record_tool_call input');
     const started = this.buildEvent(agentCtx, 'tool.started', { name: input.name, ...(input.arguments !== undefined ? { arguments: input.arguments } : {}) });
-    await this.adapter.storeEvent(started);
+    await this.persist(agentCtx, started);
     const finishedType = input.error !== undefined ? 'tool.failed' : 'tool.completed';
     const finished = this.buildEvent(agentCtx, finishedType, {
       name: input.name,
@@ -115,7 +141,7 @@ export class Harness {
       ...(input.error !== undefined ? { error: typeof input.error === 'string' ? input.error : JSON.stringify(input.error) } : {}),
       ...(input.duration_ms !== undefined ? { duration_ms: input.duration_ms } : {}),
     });
-    await this.adapter.storeEvent(finished);
+    await this.persist(agentCtx, finished);
     await this.record_event_link({ run_id: agentCtx.run_id, source_event_id: finished.event_id, target_event_id: started.event_id, relationship_type: 'consumes_output' });
     return { started, finished };
   }
@@ -126,7 +152,7 @@ export class Harness {
       name: opts.name,
       ...(opts.arguments !== undefined ? { arguments: opts.arguments } : {}),
     });
-    await this.adapter.storeEvent(started);
+    await this.persist(agentCtx, started);
     const begun = Date.now();
     try {
       const result = await fn();
@@ -148,27 +174,30 @@ export class Harness {
       const failed = this.buildEvent(agentCtx, 'tool.failed', {
         name, error: error instanceof Error ? error.message : String(error), duration_ms,
       });
-      await this.adapter.storeEvent(failed);
+      await this.persist(agentCtx, failed);
       return failed;
     }
     const limit = this.maxMetadataBytes;
     const safeResult = redact(outcome.result);
     const resultSize = metadataByteSize({ result: safeResult });
     if (resultSize > limit) {
-      const artifactId = randomUUID();
+      const content = Buffer.from(JSON.stringify(safeResult ?? null), 'utf8');
+      const artifactId = await this.adapter.storeArtifactContent({ runId: agentCtx.run_id,
+        agentExecutionId: agentCtx.agent_execution_id, kind: 'tool-result',
+        mimeType: 'application/json', content });
       const artifact = this.buildEvent(agentCtx, 'artifact.created', {
-        artifact_id: artifactId, kind: 'tool-result', mime_type: 'application/json', size_bytes: resultSize,
+        artifact_id: artifactId, kind: 'tool-result', mime_type: 'application/json', size_bytes: content.byteLength,
       });
-      await this.adapter.storeEvent(artifact);
+      await this.persist(agentCtx, artifact);
       const completed = this.buildEvent(agentCtx, 'tool.completed', {
         name, result_ref: artifactId, duration_ms,
         note: `Result exceeded the ${limit} byte metadata limit and was recorded as an artifact reference.`,
       });
-      await this.adapter.storeEvent(completed);
+      await this.persist(agentCtx, completed);
       return completed;
     }
     const completed = this.buildEvent(agentCtx, 'tool.completed', { name, result: safeResult, duration_ms });
-    await this.adapter.storeEvent(completed);
+    await this.persist(agentCtx, completed);
     return completed;
   }
 
@@ -182,14 +211,23 @@ export class Harness {
   async attach_artifact(agentCtx: AgentExecutionContext, raw: AttachArtifactInput): Promise<Event> {
     const input = parse(attachArtifactInputSchema, raw, 'attach_artifact input');
     const event = this.buildEvent(agentCtx, 'artifact.created', { ...input });
-    await this.adapter.storeEvent(event);
+    await this.persist(agentCtx, event);
     return event;
+  }
+
+  async store_payload(agentCtx: AgentExecutionContext, input: { kind: string; value: unknown; mimeType?: string }):
+    Promise<{ artifact_id: string; size_bytes: number }> {
+    const content = Buffer.from(JSON.stringify(input.value ?? null), 'utf8');
+    const artifact_id = await this.adapter.storeArtifactContent({ runId: agentCtx.run_id,
+      agentExecutionId: agentCtx.agent_execution_id, kind: input.kind,
+      mimeType: input.mimeType ?? 'application/json', content });
+    return { artifact_id, size_bytes: content.byteLength };
   }
 
   async finish_execution(agentCtx: AgentExecutionContext, raw: FinishExecutionInput): Promise<Event> {
     const input = parse(finishExecutionInputSchema, raw, 'finish_execution input');
     const event = this.buildEvent(agentCtx, 'agent.completed', { ...input });
-    await this.adapter.storeEvent(event);
+    await this.persist(agentCtx, event);
     return event;
   }
 }

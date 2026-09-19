@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { failureFingerprint, failureSignal } from '../src/database.js';
+import { failureFingerprint, failureSignal } from '../src/sdk/index.js';
 import { investigationReportDraftSchema } from '../src/types.js';
 import { InvestigationAgent } from '../src/investigation.js';
 

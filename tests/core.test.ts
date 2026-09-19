@@ -1,9 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { EventLog, redact } from '../src/telemetry.js';
+import { readFile } from 'node:fs/promises';
+import { redact } from '../src/telemetry.js';
 import { validateMap, validatePlan, taskTransitions, flowTree, pool, matchesState } from '../src/flow.js';
 import { verifyReport } from '../src/observer.js';
 import { validateSingleAction } from '../src/worker.js';
@@ -61,22 +59,6 @@ test('pool respects concurrency and stops dequeuing after cancellation', async (
   const controller = new AbortController(); const after: number[] = [];
   await pool([1, 2, 3], 1, controller.signal, async item => { after.push(item); controller.abort(); });
   assert.deepEqual(after, [1]);
-});
-test('global log serializes concurrent events, persists IDs across restart, and survives telemetry errors', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'agent-log-'));
-  const file = join(dir, 'events.jsonl');
-  try {
-    const log = new EventLog(file, false); await log.init();
-    await Promise.all(Array.from({ length: 40 }, (_, i) => log.write({ runId: 'r', agentId: `a${i % 2}`, role: 'worker', sessionId: `s${i % 2}` }, 'action', { i })));
-    const events = await log.read('r');
-    assert.deepEqual(events.map(e => e.seq), Array.from({ length: 40 }, (_, i) => i + 1));
-    assert.equal(events[0].sessionId, 's0');
-    const restarted = new EventLog(file, () => { throw new Error('Transport failed'); }); await restarted.init();
-    const next = await restarted.write({ runId: 'r2', agentId: 'observer', role: 'observer' }, 'report');
-    assert.equal(next.seq, 41);
-    assert.equal((await restarted.read('r2')).length, 1);
-    assert.equal((await readFile(file, 'utf8')).trim().split('\n').length, 41);
-  } finally { await rm(dir, { recursive: true, force: true }); }
 });
 test('redaction and observer evidence validation', () => {
   assert.deepEqual(redact({ password: 'secret', token: 'secret', message: 'ok' }), { password: '[redacted]', token: '[redacted]', message: 'ok' });

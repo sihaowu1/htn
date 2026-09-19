@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
-import type { EvidenceDatabase } from './database.js';
+import type { PgAdapter } from './sdk/index.js';
 
 export type EvidenceToolName = 'get_run_summary' | 'get_event' | 'get_agent_events' |
   'get_related_events' | 'read_artifact' | 'get_sentry_trace';
@@ -10,7 +10,7 @@ export class EvidenceTools {
   private eventsRead = 0;
   private artifactBytes = 0;
 
-  constructor(private db: EvidenceDatabase, private runId: string, private limits: {
+  constructor(private db: PgAdapter, private runId: string, private limits: {
     maxCalls: number; maxEvents: number; maxArtifactBytes: number;
   }) {}
 

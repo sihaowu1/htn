@@ -1,20 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { crawl } from '../src/crawler.js';
 import { fingerprint } from '../src/browser.js';
 import { planRelevantTree, validateMap } from '../src/flow.js';
-import { EventLog, Trace } from '../src/telemetry.js';
+import { Harness, MemoryAdapter } from '../src/sdk/index.js';
 import type { Model } from '../src/model.js';
 
+async function fixture(agentId = 'crawler') {
+  const adapter = new MemoryAdapter();
+  const harness = new Harness(adapter);
+  const run = await harness.start_run({ goal: 'crawler test' });
+  const agent = await harness.register_agent_execution(run, { agent_id: agentId });
+  return { adapter, harness, agent };
+}
+
 test('rendered local crawler maps URLs to the worker origin and discovers goal-relevant interactions', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'rendered-crawler-'));
-  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
-  const trace = new Trace(log, { runId: 'crawl', agentId: 'crawler', role: 'crawler' });
+  const { adapter, harness, agent } = await fixture();
   const calls: unknown[] = [];
-  const model: Model = { call: async (_trace, name, schema, _instruction, input: any, _signal, options) => {
+  const model: Model = { call: async (_harness, _agent, name, schema, _instruction, input: any, _signal, options) => {
     calls.push({ name, input, options });
     const composite = input.choices.find((choice: { description: string }) => /then Add to Cart/i.test(choice.description));
     const search = input.choices.find((choice: { description: string }) => /Search using/i.test(choice.description));
@@ -25,7 +28,7 @@ test('rendered local crawler maps URLs to the worker origin and discovers goal-r
     })), reason: 'TV, search, and cart interactions match the goal' });
   } };
   try {
-    const map = await crawl('https://worker.example/store/', 'View 3 televisions in the cart', model, trace,
+    const map = await crawl('https://worker.example/store/', 'View 3 televisions in the cart', model, harness, agent,
       new AbortController().signal, () => {}, { states: 8, depth: 3 });
     validateMap(map);
     assert.ok(map.states.length > 1);
@@ -42,27 +45,25 @@ test('rendered local crawler maps URLs to the worker origin and discovers goal-r
       'goal-satisfied states must be terminal and not expand repeated navigation/cart controls');
     assert.equal((calls[0] as any).options.reasoningEffort, 'low');
     assert.ok(planRelevantTree(map, 'View 3 televisions in the cart').paths.length >= 1);
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally { await adapter.close(); }
 });
 
 test('crawler caps children at 5, passes explored behaviors, and records dropped choices as unexplored', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'rendered-crawler-cap-'));
-  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
-  const trace = new Trace(log, { runId: 'crawl', agentId: 'crawler', role: 'crawler' });
+  const { adapter, harness, agent } = await fixture();
   const seen: any[] = [];
-  const model: Model = { call: async (_trace, _name, schema, _instruction, input: any) => {
+  const model: Model = { call: async (_harness, _agent, _name, schema, _instruction, input: any) => {
     seen.push(input);
     const [skipped, ...rest] = input.choices;
     return schema.parse({ selections: rest.map((choice: { id: string; task: string }) => ({ choiceId: choice.id, task: choice.task, value: '' })),
       skipped: [{ choiceId: skipped.id, reason: 'repeat of an explored behavior' }], reason: 'all' });
   } };
   try {
-    const map = await crawl('https://worker.example/store/', 'Browse', model, trace, new AbortController().signal, () => {}, { states: 3, depth: 1 });
+    const map = await crawl('https://worker.example/store/', 'Browse', model, harness, agent, new AbortController().signal, () => {}, { states: 3, depth: 1 });
     const children = (id: string) => map.transitions.filter(transition => transition.from === id);
     assert.ok(children('s0').filter(transition => transition.status !== 'unexplored').length <= 5);
     assert.ok(children('s0').some(transition => transition.status === 'unexplored' && /repeat/.test(transition.reason)));
     assert.ok(children('s0').some(transition => transition.status === 'unexplored' && /5-child limit/.test(transition.reason)));
     assert.deepEqual(seen[0].alreadyExplored, []);
     validateMap(map);
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally { await adapter.close(); }
 });

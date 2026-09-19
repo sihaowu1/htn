@@ -1,21 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { z } from 'zod';
 import { OpenAIModel } from '../src/model.js';
-import { EventLog, Trace } from '../src/telemetry.js';
+import { Harness, MemoryAdapter } from '../src/sdk/index.js';
 
 async function fixture() {
-  const dir = await mkdtemp(join(tmpdir(), 'model-api-'));
-  const log = new EventLog(join(dir, 'events.jsonl'), false);
-  await log.init();
-  return { dir, log, trace: new Trace(log, { runId: 'run', agentId: 'agent', role: 'orchestrator' }) };
+  const adapter = new MemoryAdapter();
+  const harness = new Harness(adapter);
+  const run = await harness.start_run({ goal: 'model test' });
+  const agent = await harness.register_agent_execution(run, { agent_id: 'orchestrator' });
+  return { adapter, harness, agent };
+}
+
+function eventsOf(adapter: MemoryAdapter, type: string) {
+  return [...adapter.events.values()].filter(e => e.event_type === type);
 }
 
 test('reasoning calls use Responses structured output', async () => {
-  const { dir, log, trace } = await fixture();
+  const { adapter, harness, agent } = await fixture();
   try {
     let request: any;
     const model = new OpenAIModel();
@@ -26,20 +28,23 @@ test('reasoning calls use Responses structured output', async () => {
       } },
       chat: { completions: { create: async () => { throw new Error('Chat Completions should not be called'); } } },
     };
-    const result = await model.call(trace, 'select_paths', z.object({ selected: z.array(z.string()) }),
+    const result = await model.call(harness, agent, 'select_paths', z.object({ selected: z.array(z.string()) }),
       'Select paths.', { paths: ['path-a'] }, new AbortController().signal,
       { model: 'gpt-5.6-luna', reasoningEffort: 'low' });
     assert.deepEqual(result, { selected: ['path-a'] });
     assert.deepEqual(request.reasoning, { effort: 'low' });
     assert.equal(request.store, false);
     assert.equal(request.text.format.type, 'json_schema');
-    const events = await log.read('run');
-    assert.equal((events.find(event => event.type === 'model.request')?.data as any).api, 'responses');
-  } finally { await rm(dir, { recursive: true, force: true }); }
+    const requested = eventsOf(adapter, 'model.request');
+    assert.equal(requested.length, 1);
+    assert.equal((requested[0].metadata as any).api, 'responses');
+    assert.ok((requested[0].metadata as any).input_ref);
+    assert.equal(eventsOf(adapter, 'model.response').length, 1);
+  } finally { await adapter.close(); }
 });
 
 test('non-reasoning calls remain on Chat Completions', async () => {
-  const { dir, log, trace } = await fixture();
+  const { adapter, harness, agent } = await fixture();
   try {
     let request: any;
     const model = new OpenAIModel();
@@ -50,12 +55,13 @@ test('non-reasoning calls remain on Chat Completions', async () => {
         return { choices: [{ message: { tool_calls: [{ type: 'function', function: { name: 'act', arguments: '{"action":"click"}' } }] } }], usage: {} };
       } } },
     };
-    const result = await model.call(trace, 'act', z.object({ action: z.string() }),
+    const result = await model.call(harness, agent, 'act', z.object({ action: z.string() }),
       'Choose an action.', {}, new AbortController().signal);
     assert.deepEqual(result, { action: 'click' });
     assert.equal(request.tools[0].type, 'function');
     assert.equal('reasoning_effort' in request, false);
-    const events = await log.read('run');
-    assert.equal((events.find(event => event.type === 'model.request')?.data as any).api, 'chat.completions');
-  } finally { await rm(dir, { recursive: true, force: true }); }
+    const requested = eventsOf(adapter, 'model.request');
+    assert.equal(requested.length, 1);
+    assert.equal((requested[0].metadata as any).api, 'chat.completions');
+  } finally { await adapter.close(); }
 });

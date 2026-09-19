@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import type { PoolClient } from 'pg';
 import { config } from './config.js';
-import { EvidenceDatabase, type InvestigationJob } from './database.js';
+import { PgAdapter, type InvestigationJob } from './sdk/index.js';
 import { EvidenceTools } from './evidence-tools.js';
 import { InvestigationAgent } from './investigation.js';
 
@@ -16,7 +16,7 @@ export class ObserverWorker {
   private maintenance?: ReturnType<typeof setInterval>;
   private listener?: PoolClient;
 
-  constructor(private db: EvidenceDatabase) {}
+  constructor(private db: PgAdapter) {}
 
   async start() {
     const listener = await this.db.pool.connect();
@@ -85,7 +85,7 @@ export class ObserverWorker {
 }
 
 async function main() {
-  const db = new EvidenceDatabase();
+  const db = new PgAdapter();
   await db.init();
   const worker = new ObserverWorker(db);
   await worker.start();

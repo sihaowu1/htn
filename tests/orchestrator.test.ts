@@ -5,11 +5,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { config } from '../src/config.js';
 import { orchestratePaths } from '../src/orchestrator/index.js';
-import { EventLog, Trace } from '../src/telemetry.js';
+import { Harness, MemoryAdapter } from '../src/sdk/index.js';
 import type { Model } from '../src/model.js';
 import type { FlowMap, Snapshot } from '../src/types.js';
 
 const snapshot = (url: string, text: string): Snapshot => ({ url, title: text, text, dom: `<body>${text}</body>`, elements: [], fingerprint: text, unsupported: [] });
+
+async function fixture(agentId = 'orchestrator') {
+  const adapter = new MemoryAdapter();
+  const harness = new Harness(adapter);
+  const run = await harness.start_run({ goal: 'orchestrator test' });
+  const agent = await harness.register_agent_execution(run, { agent_id: agentId });
+  return { adapter, harness, agent };
+}
 
 test('orchestrator selects MAX_PATHS diverse candidates with a cheap low-reasoning model and persists them', async () => {
   const count = config.maxPaths + 2;
@@ -22,10 +30,9 @@ test('orchestrator selects MAX_PATHS diverse candidates with a cheap low-reasoni
       actions: [{ kind: 'click' as const, selector: `#choice-${index}`, value: '' }], status: 'observed' as const, reason: '' })),
   };
   const dir = await mkdtemp(join(tmpdir(), 'orchestrator-'));
-  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
-  const trace = new Trace(log, { runId: 'run-test', agentId: 'orchestrator', role: 'orchestrator' });
+  const { adapter, harness, agent } = await fixture();
   let options: unknown;
-  const model: Model = { call: async (_trace, name, schema, _instruction, input: any, _signal, callOptions) => {
+  const model: Model = { call: async (_harness, _agent, name, schema, _instruction, input: any, _signal, callOptions) => {
     assert.equal(name, 'select_diverse_paths'); options = callOptions;
     const candidates = input.candidates as { id: string }[];
     const remaining = config.maxPaths - input.alreadySelected.length;
@@ -34,7 +41,7 @@ test('orchestrator selects MAX_PATHS diverse candidates with a cheap low-reasoni
     return schema.parse({ pathIds: spread, reason: 'Selected paths with different branches and terminal states.' });
   } };
   try {
-    const result = await orchestratePaths(map, 'Test varied routes', 'run-test', model, trace, new AbortController().signal, dir);
+    const result = await orchestratePaths(map, 'Test varied routes', 'run-test', model, harness, agent, new AbortController().signal, dir);
     assert.equal(result.plan.paths.length, config.maxPaths);
     assert.equal((options as any).model, config.orchestratorModel);
     assert.equal((options as any).reasoningEffort, 'low');
@@ -43,7 +50,7 @@ test('orchestrator selects MAX_PATHS diverse candidates with a cheap low-reasoni
     assert.equal(persisted.selectedPaths.length, config.maxPaths);
     assert.equal(persisted.maxPaths, config.maxPaths);
     assert.match(result.file.replaceAll('\\', '/'), /orchestrator\/run-test\/selected-paths\.json$/);
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally { await adapter.close(); await rm(dir, { recursive: true, force: true }); }
 });
 
 test('orchestrator deterministically selects direct, category, and search entry strategies', async () => {
@@ -66,11 +73,10 @@ test('orchestrator deterministically selects direct, category, and search entry 
     ],
   };
   const dir = await mkdtemp(join(tmpdir(), 'orchestrator-routes-'));
-  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
-  const trace = new Trace(log, { runId: 'run-routes', agentId: 'orchestrator', role: 'orchestrator' });
+  const { adapter, harness, agent } = await fixture();
   const model: Model = { call: async () => { throw new Error('model should not be needed when all route classes are available'); } };
   try {
-    const result = await orchestratePaths(map, 'Add three televisions to cart', 'run-routes', model, trace,
+    const result = await orchestratePaths(map, 'Add three televisions to cart', 'run-routes', model, harness, agent,
       new AbortController().signal, dir);
     assert.equal(result.plan.paths.length, 3);
     const persisted = JSON.parse(await readFile(result.file, 'utf8'));
@@ -78,5 +84,5 @@ test('orchestrator deterministically selects direct, category, and search entry 
       ['direct', 'category', 'search']);
     assert.deepEqual(persisted.selectedPaths.map((path: { productIds: string[] }) => path.productIds),
       [['p1'], ['p3'], ['p2']]);
-  } finally { await rm(dir, { recursive: true, force: true }); }
+  } finally { await adapter.close(); await rm(dir, { recursive: true, force: true }); }
 });

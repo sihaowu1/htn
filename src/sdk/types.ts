@@ -68,7 +68,10 @@ export const eventLinkSchema = z.object({
 }).refine(link => link.source_event_id !== link.target_event_id, { message: 'Self-links are rejected' });
 export type EventLink = z.infer<typeof eventLinkSchema>;
 
-export const startRunInputSchema = z.object({ goal: z.string().trim().min(1).max(8000) });
+export const startRunInputSchema = z.object({
+  goal: z.string().trim().min(1).max(8000),
+  run_id: uuidSchema.optional(),
+});
 export type StartRunInput = z.infer<typeof startRunInputSchema>;
 
 export const registerAgentInputSchema = z.object({
@@ -84,7 +87,7 @@ export const emitEventInputSchema = z.object({
   trace_id: z.string().max(500).optional(),
   span_id: z.string().max(500).optional(),
   parent_span_id: z.string().max(500).optional(),
-  validate_metadata: z.boolean().default(false),
+  validate_metadata: z.boolean().optional(),
 });
 export type EmitEventInput = z.infer<typeof emitEventInputSchema>;
 

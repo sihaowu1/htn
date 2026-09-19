@@ -4,12 +4,12 @@ import { z } from 'zod';
 import { fileURLToPath } from 'node:url';
 import type { Notification, PoolClient } from 'pg';
 import { config, missingCredentials } from './config.js';
-import { EvidenceDatabase } from './database.js';
 import { EvidenceTools } from './evidence-tools.js';
 import { validateMap, flowTree } from './flow.js';
-import { EventLog, Sentry } from './telemetry.js';
+import { Harness, MemoryAdapter, PgAdapter, type LegacyEvent } from './sdk/index.js';
+import { Sentry } from './telemetry.js';
 import { Runner } from './runner.js';
-import type { LogEvent, Run } from './types.js';
+import type { Run } from './types.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -19,15 +19,17 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
-const database = config.databaseUrl ? new EvidenceDatabase() : undefined;
-const log = database || new EventLog();
-await log.init();
+const store: PgAdapter | MemoryAdapter =
+  config.databaseUrl ? new PgAdapter() : new MemoryAdapter();
+if (store instanceof PgAdapter) await store.init();
+const database = store instanceof PgAdapter ? store : undefined;
+const harness = new Harness(store);
 const clients = new Map<string, Set<express.Response>>();
 function send(runId: string, name: string, payload: unknown) {
   for (const res of clients.get(runId) || []) res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
-const runner = new Runner(log, (run: Run) => send(run.id, 'run', run));
-log.on('event', (event: LogEvent) => send(event.runId, 'log', event));
+const runner = new Runner(harness, (run: Run) => send(run.id, 'run', run));
+store.on('event', (event: LegacyEvent) => send(event.runId, 'log', event));
 let investigationListener: PoolClient | undefined;
 if (database) {
   const listener = await database.pool.connect();
@@ -103,7 +105,7 @@ app.get('/api/runs/:id/events', async (req, res) => {
   const set = clients.get(run.id) || new Set(); clients.set(run.id, set); set.add(res);
   res.write(`event: run\ndata: ${JSON.stringify(run)}\n\n`);
   // Subscribe before replay. Client de-duplicates sequence IDs to cover the overlap.
-  for (const event of await log.read(run.id)) res.write(`event: log\ndata: ${JSON.stringify(event)}\n\n`);
+  for (const event of await store.readEvents(run.id)) res.write(`event: log\ndata: ${JSON.stringify(event)}\n\n`);
   const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15_000);
   req.on('close', () => { clearInterval(heartbeat); set.delete(res); });
 });
@@ -117,9 +119,9 @@ async function stop() {
   server.close();
   await runner.shutdown();
   for (const set of clients.values()) for (const res of set) res.end();
-  await log.flush();
+  await store.flush();
   if (investigationListener) { await investigationListener.query('UNLISTEN investigation_reports').catch(() => undefined); investigationListener.release(); }
-  await database?.close(); await Sentry.close(2000);
+  await store.close(); await Sentry.close(2000);
   process.exit(0);
 }
 process.on('SIGINT', () => void stop());
