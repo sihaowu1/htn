@@ -6,7 +6,7 @@
    npm ci
    ```
 
-2. Copy `.env.example` to `.env`. Set `OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and `SENTRY_DSN`. Change `OPENAI_MODEL` if needed for your account. Browserbase is used only to provision isolated cloud Chromium sessions; this project controls them with Playwright over CDP and does not use Browserbase AI Agents.
+2. Copy `.env.example` to `.env`. Set `OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `SENTRY_DSN`, and `DATABASE_URL`. Change `OPENAI_MODEL` if needed for your account. `DATABASE_URL` must point to an empty or previously migrated PostgreSQL database; migrations are applied automatically. Browserbase is used only to provision isolated cloud Chromium sessions; this project controls them with Playwright over CDP and does not use Browserbase AI Agents.
 
 3. Add and start your own disposable target website in `local_website/` (left empty). Expose its port using your tunnel tool, for example:
 
@@ -21,20 +21,24 @@
 
    ```sh
    winget install ngrok.ngrok # windows cli idk about mac
-   ngrok config add-authtoken YOUR_TOKEN # create ur free acc on ngrok
+   ngrok config add-authtoken YOUR_TOKEN
    ngrok update 
    ngrok http 127.0.0.1:8080
    ```
 
    The app automatically sends ngrok's `ngrok-skip-browser-warning: true` header from Browserbase, so the free-tier warning page should be skipped. If you open the URL manually, append `?ngrok-skip-browser-warning=true` once. The target needs a reachable public HTTP(S) URL because the cloud browser cannot connect to the app's localhost directly.
 
-4. Start our project app and open http://localhost:3000:
+4. Start the API and the durable investigation worker in separate terminals, then open http://localhost:3000:
 
    ```sh
    npm run dev
    ```
 
-5. Paste the target's HTTPS tunnel URL, enter a task, choose maximum simultaneous workers, and click **Start**. Watch discovery, worker browsers, events, and observer reports. Use **Stop** to cancel. The temporary `TEST SINGLE ACTION` switch skips discovery and normal planning: one worker inspects the initial page, executes one simple requested task using a short sequence of only controls observed there (for example, fill search and submit), and stops. It does not require a flow map. Global events are saved to `logs/events.jsonl`; use the event's agent/session IDs to match Browserbase and Sentry.
+   ```sh
+   npm run dev:observer
+   ```
+
+5. Paste the target's HTTPS tunnel URL, enter a task, choose maximum simultaneous workers, and click **Start**. Watch discovery, worker browsers, events, and investigation reports. Use **Stop** to cancel. The temporary `TEST SINGLE ACTION` switch skips discovery and normal planning: one worker inspects the initial page, executes one simple requested task using only observed controls, and stops. PostgreSQL is authoritative for evidence. Failure signals create deduplicated investigation jobs, and completed reports are published on the run event stream; use event agent/session IDs to match Browserbase and Sentry.
 
 6. If discovery is incomplete or does not work, download a flow map, correct it, and select it with the JSON input on the next run. Use `examples/flow-map.json` as a format example. Its `startUrl` must exactly match the target URL. Increase `CRAWL_MAX_STATES`, `CRAWL_MAX_DEPTH`, or `CRAWL_TIMEOUT_MS` in `.env` if needed, then restart. Use a repeatable demo site: discovery may submit forms and fresh sessions do not reset backend data.
 
@@ -64,4 +68,5 @@ RUN_BROWSER_TESTS=1 npm run test:browser
 ```sh
 npm run build
 npm start
+npm run start:observer
 ```

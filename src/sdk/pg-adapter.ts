@@ -1,6 +1,7 @@
 import pg from 'pg';
 import type { AgentExecution, Event, EventLink, Run } from './types.js';
 import type { StoreAdapter } from './harness.js';
+import { enqueueInvestigationForEvent } from '../database.js';
 
 const { Pool } = pg;
 
@@ -53,8 +54,10 @@ export class PgAdapter implements StoreAdapter {
   }
 
   async storeEvent(event: Event): Promise<void> {
+    const client = await this.db.connect();
     try {
-      const result = await this.db.query(
+      await client.query('BEGIN');
+      const result = await client.query(
         `INSERT INTO events (event_id, run_id, agent_execution_id, session_id, occurred_at,
            sequence_number, event_type, trace_id, span_id, parent_span_id, metadata, schema_version)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -63,14 +66,18 @@ export class PgAdapter implements StoreAdapter {
           event.sequence_number, event.event_type, event.trace_id ?? null, event.span_id ?? null,
           event.parent_span_id ?? null, JSON.stringify(event.metadata), event.schema_version],
       );
-      if (result.rowCount === 0) await this.detectConflictingReuse(event);
+      if (result.rowCount === 0) await this.detectConflictingReuse(event, client);
+      else await enqueueInvestigationForEvent(client, { runId: event.run_id, eventId: event.event_id,
+        type: event.event_type, data: event.metadata });
+      await client.query('COMMIT');
     } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
       throw this.translate(error);
-    }
+    } finally { client.release(); }
   }
 
-  private async detectConflictingReuse(event: Event): Promise<void> {
-    const existing = await this.db.query(
+  private async detectConflictingReuse(event: Event, client: pg.PoolClient): Promise<void> {
+    const existing = await client.query(
       'SELECT event_type, metadata FROM events WHERE event_id = $1', [event.event_id],
     );
     const row = existing.rows[0] as { event_type: string; metadata: unknown } | undefined;

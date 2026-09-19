@@ -66,8 +66,13 @@ export class EventLog extends EventEmitter {
   }
   async flush() { await this.tail; }
 }
+export interface EventWriter {
+  write(identity: Identity, type: string, data?: unknown): Promise<LogEvent>;
+  read(runId?: string): Promise<LogEvent[]>;
+  flush(): Promise<void>;
+}
 export class Trace {
-  constructor(public log: EventLog, public identity: Identity) {}
+  constructor(public log: EventWriter, public identity: Identity) {}
   event(type: string, data: unknown = {}) { return this.log.write(this.identity, type, data); }
   async span<T>(name: string, work: () => Promise<T>): Promise<T> {
     return Sentry.startSpan({ name, op: name === 'model.call' ? 'gen_ai.request' : 'agent', attributes: { ...this.identity } }, async () => {

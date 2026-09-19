@@ -2,7 +2,10 @@ import './telemetry.js';
 import express from 'express';
 import { z } from 'zod';
 import { fileURLToPath } from 'node:url';
+import type { Notification, PoolClient } from 'pg';
 import { config, missingCredentials } from './config.js';
+import { EvidenceDatabase } from './database.js';
+import { EvidenceTools } from './evidence-tools.js';
 import { validateMap, flowTree } from './flow.js';
 import { EventLog, Sentry } from './telemetry.js';
 import { Runner } from './runner.js';
@@ -16,7 +19,8 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
-const log = new EventLog();
+const database = config.databaseUrl ? new EvidenceDatabase() : undefined;
+const log = database || new EventLog();
 await log.init();
 const clients = new Map<string, Set<express.Response>>();
 function send(runId: string, name: string, payload: unknown) {
@@ -24,6 +28,18 @@ function send(runId: string, name: string, payload: unknown) {
 }
 const runner = new Runner(log, (run: Run) => send(run.id, 'run', run));
 log.on('event', (event: LogEvent) => send(event.runId, 'log', event));
+let investigationListener: PoolClient | undefined;
+if (database) {
+  const listener = await database.pool.connect();
+  investigationListener = listener;
+  await listener.query('LISTEN investigation_reports');
+  listener.on('notification', async (notification: Notification) => {
+    if (!notification.payload) return;
+    const rows = await database.getInvestigation(notification.payload).catch(() => []);
+    const latest = rows[0];
+    if (latest?.report?.run_id) send(latest.report.run_id, 'investigation', latest.report);
+  });
+}
 app.get('/api/config', (_req, res) => res.json({ maxWorkers: config.maxWorkers, missingCredentials: missingCredentials() }));
 const requestSchema = z.object({ prompt: z.string().trim().min(1).max(8000), targetUrl: z.string().url(),
   maxWorkers: z.number().int().min(1).max(config.maxWorkers), flowMap: z.unknown().optional(), testSingleAction: z.boolean().default(false) });
@@ -54,6 +70,30 @@ app.get('/api/runs/:id/tree', (req, res) => {
   if (!map) { res.status(404).json({ error: 'No flow map yet' }); return; }
   res.json(flowTree(map));
 });
+app.get('/api/runs/:id/investigations', async (req, res) => {
+  if (!database) { res.status(503).json({ error: 'DATABASE_URL is not configured' }); return; }
+  res.json(await database.listInvestigations(req.params.id));
+});
+app.get('/api/investigations/:id', async (req, res) => {
+  if (!database) { res.status(503).json({ error: 'DATABASE_URL is not configured' }); return; }
+  const reports = await database.getInvestigation(req.params.id);
+  if (!reports.length) { res.status(404).json({ error: 'Investigation not found' }); return; }
+  res.json(reports);
+});
+app.post('/api/runs/:id/investigations', async (req, res) => {
+  if (!database) { res.status(503).json({ error: 'DATABASE_URL is not configured' }); return; }
+  const input = z.object({ eventId: z.string().uuid(), signal: z.string().min(1).max(200).default('USER_REQUESTED') }).parse(req.body);
+  const jobId = await database.requestInvestigation(req.params.id, input.eventId, input.signal);
+  res.status(202).json({ jobId });
+});
+app.get('/api/runs/:id/artifacts/:artifactId', async (req, res) => {
+  if (!database) { res.status(503).json({ error: 'DATABASE_URL is not configured' }); return; }
+  const query = z.object({ offset: z.coerce.number().int().nonnegative().default(0),
+    limit: z.coerce.number().int().min(1).max(65_536).default(4096) }).parse(req.query);
+  const tools = new EvidenceTools(database, req.params.id, { maxCalls: 1, maxEvents: 1,
+    maxArtifactBytes: config.investigationMaxArtifactBytes });
+  res.json(await tools.readArtifact(req.params.artifactId, query.offset, query.limit));
+});
 app.post('/api/runs/:id/cancel', (req, res) => res.status(runner.cancel(req.params.id) ? 202 : 404).json({ ok: true }));
 app.get('/api/runs/:id/events', async (req, res) => {
   const run = runner.runs.get(req.params.id);
@@ -77,7 +117,9 @@ async function stop() {
   server.close();
   await runner.shutdown();
   for (const set of clients.values()) for (const res of set) res.end();
-  await log.flush(); await Sentry.close(2000);
+  await log.flush();
+  if (investigationListener) { await investigationListener.query('UNLISTEN investigation_reports').catch(() => undefined); investigationListener.release(); }
+  await database?.close(); await Sentry.close(2000);
   process.exit(0);
 }
 process.on('SIGINT', () => void stop());

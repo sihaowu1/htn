@@ -5,17 +5,16 @@ import { config } from './config.js';
 import { crawl } from './crawler/index.js';
 import { pool, validateMap } from './flow.js';
 import { OpenAIModel } from './model.js';
-import { Observer } from './observer.js';
 import { orchestratePaths } from './orchestrator/index.js';
 import { executeNodeSequence } from './execution/node-sequence.js';
-import { EventLog, Trace } from './telemetry.js';
+import { Trace, type EventWriter } from './telemetry.js';
 import { type FlowMap, type Run, type Identity } from './types.js';
 import { executeSingleAction } from './worker.js';
 
 export class Runner {
   runs = new Map<string, Run>();
   private active?: { run: Run; controller: AbortController; done: Promise<void> };
-  constructor(public log: EventLog, private publish: (run: Run) => void) {}
+  constructor(public log: EventWriter, private publish: (run: Run) => void) {}
   start(prompt: string, targetUrl: string, maxWorkers: number, supplied?: FlowMap, testSingleAction = false) {
     if (this.active) throw new Error('A run is already active');
     const run: Run = { id: randomUUID(), prompt, targetUrl, maxWorkers, status: 'starting', sessions: [], findings: [], results: [] };
@@ -36,7 +35,8 @@ export class Runner {
   async shutdown() { if (this.active) { this.active.controller.abort(new Error('Server shutdown')); await this.active.done; } }
   private async execute(run: Run, controller: AbortController, supplied?: FlowMap, testSingleAction = false) {
     const signal = controller.signal;
-    const trace = (role: Identity['role'], agentId: string = role) => new Trace(this.log, { runId: run.id, agentId, role });
+    const trace = (role: Identity['role'], agentId: string = role) => new Trace(this.log,
+      { runId: run.id, agentId, role, agentExecutionId: randomUUID() });
     const system = trace('system');
     const model = new OpenAIModel();
     const sessions = new Set<BrowserSession>();
@@ -52,9 +52,7 @@ export class Runner {
       if (scope.aborted) { await session.close(); scope.throwIfAborted(); }
       return session;
     };
-    const observer = new Observer(model, trace('observer'), report => { run.findings.push(report); this.publish(run); });
     await system.event('run.started', { prompt: run.prompt, targetUrl: run.targetUrl, maxWorkers: run.maxWorkers });
-    observer.start();
     try {
       if (testSingleAction) {
         run.status = 'running';
@@ -116,6 +114,7 @@ export class Runner {
         const workerSignal = AbortSignal.any([signal, AbortSignal.timeout(config.workerTimeout)]);
         let session: BrowserSession | undefined;
         try {
+          await t.event('agent.started', { assignedTask: task.name, instructions: task.instructions });
           session = await open(t, workerSignal);
           const result = await t.span('worker', () => executeNodeSequence(task, map, run.prompt,
             url => session!.page(url), model, t, workerSignal, instruction => {
@@ -124,6 +123,7 @@ export class Runner {
               this.publish(run);
             }));
           run.results.push(result);
+          await t.event('agent.completed', { outcome: result.status, summary: result.reason });
         } catch (error) {
           const result = { name: task.name, status: signal.aborted ? 'cancelled' : 'failed', reason: String(error) };
           run.results.push(result); await t.event('worker.failed', result);
@@ -148,10 +148,6 @@ export class Runner {
     } finally {
       await Promise.allSettled([...sessions].map(s => s.close()));
       run.status = run.status === 'cancelling' ? 'cancelled' : run.status;
-      const finalStatus = run.status;
-      run.status = 'observing'; this.publish(run);
-      await observer.stop();
-      run.status = finalStatus;
       await this.log.flush();
     }
   }

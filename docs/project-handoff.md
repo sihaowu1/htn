@@ -201,7 +201,7 @@ show sources and citations; coding workflows show diffs, commands, and test outp
 | Session | External context such as a Browserbase session; not the run itself |
 | Event | A structured record of one occurrence |
 | Log | A diagnostic message, ideally correlated with structured event identity |
-| Span | An operation with duration, such as a tool call |
+| Span | An operation P{PPawith duration, such as a tool call |
 | Trace | Related operations spanning execution boundaries |
 | Event link | An explicitly recorded dependency between events |
 | Artifact | Large or specialized evidence referenced by an event |
