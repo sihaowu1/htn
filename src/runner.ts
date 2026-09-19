@@ -127,7 +127,16 @@ export class Runner {
         } catch (error) {
           const result = { name: task.name, status: signal.aborted ? 'cancelled' : 'failed', reason: String(error) };
           run.results.push(result); await t.event('worker.failed', result);
-        } finally { await session?.close(); this.publish(run); }
+        } finally {
+          if (session && !signal.aborted && config.workerLinger > 0) {
+            await t.event('worker.linger.started', { ms: config.workerLinger });
+            await new Promise<void>(resolve => {
+              const timer = setTimeout(resolve, config.workerLinger);
+              signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+            });
+          }
+          await session?.close(); this.publish(run);
+        }
       });
       await system.event('pipeline.phase.finished', { phase: 'workers', results: run.results.length });
       signal.throwIfAborted();

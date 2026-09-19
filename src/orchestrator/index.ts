@@ -2,7 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { config } from '../config.js';
-import { planRelevantTree, validatePlan } from '../flow.js';
+import { planRelevantTree, reachesGoal, validatePlan } from '../flow.js';
 import type { Model } from '../model.js';
 import type { Trace } from '../telemetry.js';
 import type { FlowMap, Plan, Task } from '../types.js';
@@ -80,7 +80,9 @@ async function persistSelection(runId: string, goal: string, candidates: Candida
 
 export async function orchestratePaths(map: FlowMap, goal: string, runId: string, model: Model, trace: Trace,
   signal: AbortSignal, logRoot = 'logs'): Promise<{ plan: Plan; file: string; reason: string }> {
-  const candidates = describeCandidates(map, goal);
+  const all = describeCandidates(map, goal);
+  const reaching = all.filter(candidate => reachesGoal(goal, map.states.find(state => state.id === candidate.terminalStateId)!.snapshot));
+  const candidates = reaching.length ? reaching : all;
   if (!candidates.length) {
     const plan = validatePlan(map, { summary: 'No executable root-to-leaf paths were discovered.', paths: [], skipped: [] });
     const reason = 'No candidate paths were available.';

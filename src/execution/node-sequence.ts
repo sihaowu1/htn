@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { inspect, perform } from '../browser.js';
 import { config } from '../config.js';
 import type { PageFactory } from '../crawler.js';
-import { matchesState, taskTransitions } from '../flow.js';
+import { matchesState, reachesGoal, taskTransitions } from '../flow.js';
 import type { Model } from '../model.js';
 import type { Trace } from '../telemetry.js';
 import type { Action, FlowMap, Snapshot, Task } from '../types.js';
@@ -65,6 +65,11 @@ export async function executeNodeSequence(task: Task, map: FlowMap, prompt: stri
       }
       at = destination.id;
       await trace.event('worker.node.completed', { index, total: transitions.length, stateId: at, instruction, reason: decision.reason });
+    }
+    const finalState = map.states.find(state => state.id === at)!;
+    if (!reachesGoal(prompt, finalState.snapshot)) {
+      const result = { name: task.name, status: 'incomplete', reason: `Completed ${transitions.length} node instruction${transitions.length === 1 ? '' : 's'} but the final state ${finalState.snapshot.url} does not reach the goal` };
+      await trace.event('worker.incomplete', { ...result, stateId: at }); return result;
     }
     const result = { name: task.name, status: 'succeeded', reason: `Completed ${transitions.length} node instruction${transitions.length === 1 ? '' : 's'} in order` };
     await trace.event('worker.success', result); return result;
