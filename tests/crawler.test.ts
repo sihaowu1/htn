@@ -32,6 +32,10 @@ test('rendered local crawler maps URLs to the worker origin and discovers goal-r
     assert.ok(map.states.every(state => !state.snapshot.url.includes('127.0.0.1')));
     assert.ok(map.states.some(state => state.task === 'Search television'));
     assert.ok(map.states.some(state => state.task?.includes('to 3 and click Add to Cart')));
+    const satisfied = map.states.find(state => /Added to cart/i.test(state.snapshot.text) && /Cart\s*3\b/i.test(state.snapshot.text));
+    assert.ok(satisfied, 'crawler should retain the goal-satisfied cart state');
+    assert.equal(map.transitions.some(transition => transition.from === satisfied.id), false,
+      'goal-satisfied states must be terminal and not expand repeated navigation/cart controls');
     assert.equal((calls[0] as any).options.reasoningEffort, 'low');
     assert.ok(planRelevantTree(map, 'View 3 televisions in the cart').paths.length >= 1);
   } finally { await rm(dir, { recursive: true, force: true }); }

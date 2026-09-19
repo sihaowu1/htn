@@ -59,6 +59,32 @@ function materialize(choice: Choice, value: string, goal: string) {
   return { actions, task };
 }
 
+function requestedQuantity(goal: string) {
+  const digit = goal.match(/\b(\d{1,2})\b/);
+  if (digit) return Number(digit[1]);
+  const words: Record<string, number> = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+  const word = goal.toLowerCase().match(/\b(one|two|three|four|five)\b/);
+  return word ? words[word[1]] : undefined;
+}
+
+function goalSatisfied(goal: string, snapshot: Snapshot) {
+  if (!/\bcart\b/i.test(goal)) return false;
+  const quantity = requestedQuantity(goal);
+  if (!quantity) return false;
+  const text = snapshot.text.replace(/\s+/g, ' ');
+  const count = new RegExp(`(?:Cart\\s*${quantity}\\b|Items\\s*\\(${quantity}\\)|Added to cart)`,'i');
+  return count.test(text) && (new RegExp(`Cart\\s*${quantity}\\b`, 'i').test(text)
+    || new RegExp(`Items\\s*\\(${quantity}\\)`, 'i').test(text));
+}
+
+function pruneSelections(selected: { item: z.infer<typeof selectionSchema>['selections'][number]; choice: Choice }[]) {
+  const compositeInputs = new Set(selected.filter(({ choice }) => choice.actions.some(action => action.kind === 'fill')
+    && choice.actions.some(action => action.kind === 'click')).flatMap(({ choice }) =>
+    choice.actions.filter(action => action.kind === 'fill').map(action => action.selector)));
+  return selected.filter(({ choice }) => !(choice.actions.length === 1 && choice.actions[0].kind === 'fill'
+    && compositeInputs.has(choice.actions[0].selector))).slice(0, 8);
+}
+
 function workerUrl(localUrl: string, localOrigin: string, workerStartUrl: string) {
   const local = new URL(localUrl);
   if (local.origin !== localOrigin) throw new Error(`Local discovery left its origin: ${localUrl}`);
@@ -99,6 +125,10 @@ export async function crawl(startUrl: string, goal: string, model: Model, trace:
     for (let cursor = 0; cursor < map.states.length; cursor++) {
       signal.throwIfAborted();
       const state = map.states[cursor];
+      if (goalSatisfied(goal, state.snapshot)) {
+        await trace.event('discovery.goal_satisfied', { stateId: state.id, task: state.task || '', url: state.snapshot.url });
+        continue;
+      }
       if (state.depth >= limits.depth || map.states.length >= limits.states) {
         map.status = 'limited'; map.notes.push(`${state.id}: ${state.depth >= limits.depth ? 'Depth' : 'State'} limit reached`); continue;
       }
@@ -109,9 +139,9 @@ export async function crawl(startUrl: string, goal: string, model: Model, trace:
         { goal, page: { url: state.snapshot.url, title: state.snapshot.title, text: state.snapshot.text.slice(0, 20_000) },
           choices: options.map(({ id, task, description, acceptsValue }) => ({ id, task, description, acceptsValue })) }, signal,
         { model: config.crawlerModel, reasoningEffort: 'low' });
-      const selected = [...new Map(selection.selections.map(item => [item.choiceId, item])).values()]
+      const selected = pruneSelections([...new Map(selection.selections.map(item => [item.choiceId, item])).values()]
         .map(item => ({ item, choice: options.find(option => option.id === item.choiceId) }))
-        .filter((item): item is { item: typeof item.item; choice: Choice } => !!item.choice);
+        .filter((item): item is { item: typeof item.item; choice: Choice } => !!item.choice));
       await trace.event('crawler.choices.selected', { stateId: state.id, selected: selected.map(({ item, choice }) => ({
         choiceId: choice.id, task: item.task, value: choice.acceptsValue ? item.value : '', description: choice.description })), reason: selection.reason });
       for (const { item, choice } of selected) {
@@ -137,6 +167,7 @@ export async function crawl(startUrl: string, goal: string, model: Model, trace:
           transition.to = destination; transition.status = 'observed'; transition.reason = '';
           await trace.event('discovery.transition', { transition, task: assignment.task, snapshot: mappedSnapshot(observed, local.origin, startUrl) });
         } catch (error) {
+          if (signal.aborted) signal.throwIfAborted();
           transition.status = signal.aborted ? 'unexplored' : 'failed'; transition.reason = String(error); map.status = 'limited';
           await trace.event('discovery.failed', { transitionId: transition.id, error: String(error) });
         } finally { await lease?.dispose().catch(() => undefined); }
