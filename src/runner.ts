@@ -81,8 +81,15 @@ export class Runner {
         } else {
           const t = trace('crawler');
           const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
-          run.map = await t.span('discovery', () => crawl(run.targetUrl, run.prompt, model, t, discoverySignal,
-            map => { run.map = map; this.publish(run); }));
+          try {
+            run.map = await t.span('discovery', () => crawl(run.targetUrl, run.prompt, model, t, discoverySignal,
+              map => { run.map = map; this.publish(run); }));
+          } catch (error) {
+            if (signal.aborted || !run.map) throw error;
+            const note = `Discovery stopped at the ${config.crawlTimeout} ms crawl timeout; unexplored branches remain.`;
+            run.map = { ...run.map, status: 'limited', notes: [...run.map.notes, note] };
+            await t.event('discovery.timeout', { note, states: run.map.states.length, transitions: run.map.transitions.length });
+          }
           await mkdir('logs', { recursive: true });
           await writeFile('logs/bestbuy_tree.json', JSON.stringify(run.map, null, 2) + '\n', 'utf8');
           await system.event('map.saved', { file: 'logs/bestbuy_tree.json' });
