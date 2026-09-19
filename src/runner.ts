@@ -6,9 +6,10 @@ import { pool, validateMap } from './flow.js';
 import { OpenAIModel } from './model.js';
 import { Observer } from './observer.js';
 import { orchestratePaths } from './orchestrator/index.js';
+import { executeNodeSequence } from './execution/node-sequence.js';
 import { EventLog, Trace } from './telemetry.js';
 import { type FlowMap, type Run, type Identity } from './types.js';
-import { executeSingleAction, executeTask } from './worker.js';
+import { executeSingleAction } from './worker.js';
 
 export class Runner {
   runs = new Map<string, Run>();
@@ -112,7 +113,12 @@ export class Runner {
         let session: BrowserSession | undefined;
         try {
           session = await open(t, workerSignal);
-          const result = await t.span('worker', () => executeTask(task, map, run.prompt, url => session!.page(url), model, t, workerSignal));
+          const result = await t.span('worker', () => executeNodeSequence(task, map, run.prompt,
+            url => session!.page(url), model, t, workerSignal, instruction => {
+              if (!session) return;
+              session.info.instruction = instruction;
+              this.publish(run);
+            }));
           run.results.push(result);
         } catch (error) {
           const result = { name: task.name, status: signal.aborted ? 'cancelled' : 'failed', reason: String(error) };

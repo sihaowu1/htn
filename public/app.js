@@ -62,7 +62,7 @@ function render(run) {
       if (!note) { note = document.createElement('small'); note.className = 'live-view-note'; card.append(note); }
       note.textContent = 'Live view URL is not available yet; check the session events for details.';
     } else card.querySelector('.live-view-note')?.remove();
-    card.firstChild.textContent = `${info.role} / ${info.agentId} / ${info.sessionId} / ${info.status}`;
+    card.firstChild.textContent = `${info.role} / ${info.agentId} / ${info.sessionId} / ${info.status}${info.instruction ? ` / ${info.instruction}` : ''}`;
   }
 }
 $('form').addEventListener('submit', async event => {

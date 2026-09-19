@@ -52,7 +52,7 @@ export type Report = z.infer<typeof reportSchema> & {
 };
 export type Identity = { runId: string; agentId: string; role: 'crawler' | 'orchestrator' | 'worker' | 'observer' | 'system'; sessionId?: string };
 export type LogEvent = Identity & { seq: number; time: string; type: string; data: unknown };
-export type SessionInfo = { agentId: string; role: string; sessionId: string; liveUrl: string; status: string };
+export type SessionInfo = { agentId: string; role: string; sessionId: string; liveUrl: string; status: string; instruction?: string };
 export type Run = {
   id: string; prompt: string; targetUrl: string; maxWorkers: number;
   status: string; sessions: SessionInfo[]; map?: FlowMap; plan?: Plan;
