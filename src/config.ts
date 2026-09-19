@@ -1,4 +1,9 @@
-import 'dotenv/config';
+import { fileURLToPath } from 'node:url';
+import { config as loadEnv } from 'dotenv';
+
+// Resolve the project .env from this module instead of process.cwd(). This keeps
+// CLI, IDE, and `npm --prefix` launches consistent for every teammate.
+loadEnv({ path: fileURLToPath(new URL('../.env', import.meta.url)), quiet: true });
 
 function number(name: string, fallback: number) {
   const value = Number(process.env[name] || fallback);

@@ -6,7 +6,7 @@
    npm ci
    ```
 
-2. Copy `.env.example` to `.env`. Set `OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `SENTRY_DSN`, and `DATABASE_URL`. Change `OPENAI_MODEL` if needed for your account. `DATABASE_URL` must point to an empty or previously migrated PostgreSQL database; migrations are applied automatically. Browserbase is used only to provision isolated cloud Chromium sessions; this project controls them with Playwright over CDP and does not use Browserbase AI Agents.
+2. Copy `.env.example` to `.env` in this project directory. Set `OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `SENTRY_DSN`, and `DATABASE_URL`; `SENTRY_DSN` is the runtime DSN from **Sentry project settings → Client Keys (DSN)**, not an auth token or ingest URL copied from elsewhere. Change `OPENAI_MODEL` if needed for your account. `DATABASE_URL` must point to an empty or previously migrated PostgreSQL database; migrations are applied automatically. For Supabase team development, copy the **Session pooler** URL and append `?sslmode=require&uselibpqcompat=true`; do not put a teammate-specific `sslrootcert` path in a shared URL. Percent-encode reserved characters in the database password. Use `sslmode=verify-full` only when that machine has been configured with the Supabase CA certificate. Browserbase is used only to provision isolated cloud Chromium sessions; this project controls them with Playwright over CDP and does not use Browserbase AI Agents.
 
 3. Add and start your own disposable target website in `local_website/` (left empty). Expose its port using your tunnel tool, for example:
 
