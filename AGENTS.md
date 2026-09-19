@@ -12,8 +12,8 @@ Since we're observing AI agent behavior, we do not use Browserbase's AI agents. 
 
 ## Architecture and responsibilities
 
-- **Discovery:** `src/crawler.ts` explores from a common starting state. `scripts/dom-snapshot.js` extracts rendered DOM observations. `src/flow.ts` represents and validates states, transitions, and paths. Website flows may have any number of branches; repeated states and cycles use references rather than infinite expansion.
-- **Orchestration:** `src/runner.ts` coordinates discovery, planning, worker concurrency, cancellation, and completion. The orchestrator analyzes the flow map and user prompt; it does not navigate the browser. Plans identify selected paths, skipped branches, worker instructions, and observable stopping conditions.
+- **Discovery:** `src/crawler/` performs same-origin HTTP fetching without Browserbase, extracts static HTML structure and crawlable links, and uses a separately configured low-reasoning OpenAI model to retain only links relevant to the user's end goal. `scripts/dom-snapshot.js` extracts rendered DOM observations later during worker execution. `src/flow.ts` represents and validates states, transitions, and paths. Website flows may have any number of branches; repeated states and cycles use references rather than infinite expansion.
+- **Orchestration:** `src/runner.ts` coordinates discovery, deterministic worker planning, worker concurrency, cancellation, and completion. Since crawler output is already task-scoped, planning assigns every valid root-to-leaf route without a second relevance-selection model call. Plans identify selected paths, skipped cycles or failed branches, worker instructions, and observable stopping conditions.
 - **Execution:** `src/worker.ts` follows assigned transitions, checks browser observations against expected states, and verifies success evidence. `src/browser.ts` owns Browserbase sessions, Playwright actions, browser events, and resource cleanup. `src/model.ts` centralizes OpenAI calls and structured output validation.
 - **Observation:** `src/telemetry.ts` provides Sentry instrumentation and a serialized global JSONL event log. `src/observer.ts` reads that log to identify failures during and after a run, citing the events that support its findings.
 - **Application:** `src/server.ts` exposes the API and event stream and serves the frontend in `public/`. The frontend accepts tasks and target URLs, displays browser sessions and plans, and presents events, results, and observer reports. Shared contracts live in `src/types.ts`.
@@ -31,7 +31,7 @@ Since we're observing AI agent behavior, we do not use Browserbase's AI agents. 
 
 ## Current implementation and evolution
 
-The current stack is Node.js 22+, TypeScript, Express, plain HTML/JavaScript, OpenAI, Browserbase, Playwright, and Sentry. One server process holds run state in memory, supports one active run at a time, and persists events to `logs/events.jsonl`. Remote browsers reach the local target through a user-provided tunnel URL.
+The current stack is Node.js 22+, TypeScript, Express, plain HTML/JavaScript, OpenAI, Browserbase, Playwright, and Sentry. Discovery uses direct HTTP requests and does not create a Browserbase session; Browserbase and Playwright are used only after planning, when workers execute selected paths. One server process holds run state in memory, supports one active run at a time, and persists events to `logs/events.jsonl`. Remote worker browsers reach the local target through a user-provided tunnel URL.
 
 Prefer the simplest implementation that meets the requested capability. Keep interfaces and dependencies small. The current plain frontend and single-process backend are starting points, not permanent restrictions: evolve them when a task requires it, while preserving the behavioral requirements above. Do not introduce unrelated infrastructure or visual polish.
 

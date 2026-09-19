@@ -28,7 +28,8 @@ function render(run) {
     function tree(id) {
       if (visited.has(id)) return { stateId: id, reference: true };
       visited.add(id);
-      return { stateId: id, branches: run.map.transitions.filter(t => t.from === id).map(t => ({
+      const state = run.map.states.find(candidate => candidate.id === id);
+      return { stateId: id, task: state?.task || '', branches: run.map.transitions.filter(t => t.from === id).map(t => ({
         id: t.id, actions: t.actions, status: t.status, reason: t.reason, next: t.to ? tree(t.to) : null,
       })) };
     }

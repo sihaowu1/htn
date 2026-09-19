@@ -8,8 +8,8 @@ export function validateMap(input: unknown, targetUrl?: string): FlowMap {
   if (ids.size !== map.states.length || !ids.has(map.rootId)) throw new Error('Invalid or duplicate state IDs');
   if (new Set(map.transitions.map(t => t.id)).size !== map.transitions.length) throw new Error('Duplicate transition IDs');
   for (const state of map.states) {
-    if (!state.snapshot.fingerprint && (map.status !== 'provided' || !state.snapshot.text.trim())) {
-      throw new Error('States require a discovered fingerprint or, for provided maps, nonempty expected visible text');
+    if (!state.snapshot.fingerprint && !state.snapshot.text.trim()) {
+      throw new Error('States require a discovered fingerprint or nonempty expected visible text');
     }
   }
   for (const t of map.transitions) {
@@ -53,12 +53,41 @@ export function validatePlan(map: FlowMap, plan: Plan): Plan {
   }
   return plan;
 }
+export function planRelevantTree(map: FlowMap, goal: string): Plan {
+  const paths: Plan['paths'] = [];
+  const walk = (stateId: string, transitionIds: string[], seen: Set<string>) => {
+    const outgoing = map.transitions.filter(t => t.from === stateId);
+    const usable = outgoing.filter(t => t.status === 'observed' && t.to && !seen.has(t.to));
+    if (!usable.length) {
+      if (transitionIds.length || stateId === map.rootId) paths.push({
+        name: `Goal path ${paths.length + 1}`,
+        transitionIds,
+        instructions: goal,
+        stopCondition: `Observable page evidence that this path satisfies the user goal: ${goal}`,
+      });
+      return;
+    }
+    for (const transition of usable) {
+      if (paths.length >= 100 || transitionIds.length >= 30) {
+        continue;
+      }
+      walk(transition.to!, [...transitionIds, transition.id], new Set([...seen, transition.to!]));
+    }
+  };
+  walk(map.rootId, [], new Set([map.rootId]));
+  const used = new Set(paths.flatMap(path => path.transitionIds));
+  const skipped = map.transitions.filter(transition => !used.has(transition.id)).map(transition => ({ transitionId: transition.id,
+    reason: transition.status !== 'observed' ? transition.reason || 'Crawler did not observe this transition'
+      : 'Cycle, repeated state, or worker plan limit prevented assignment' }));
+  return validatePlan(map, { summary: 'All worker paths come from the crawler’s goal-relevant tree; no second relevance-selection agent was used.', paths, skipped });
+}
 export function flowTree(map: FlowMap) {
   const visited = new Set<string>();
   function branch(id: string): unknown {
     if (visited.has(id)) return { stateId: id, reference: true };
     visited.add(id);
-    return { stateId: id, transitions: map.transitions.filter(t => t.from === id).map(t => ({
+    const state = map.states.find(candidate => candidate.id === id)!;
+    return { stateId: id, task: state.task || '', transitions: map.transitions.filter(t => t.from === id).map(t => ({
       id: t.id, status: t.status, reason: t.reason, actions: t.actions, next: t.to ? branch(t.to) : null,
     })) };
   }

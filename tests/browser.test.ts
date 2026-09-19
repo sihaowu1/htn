@@ -75,12 +75,13 @@ test('real Chromium: discovery, replay, search-only stopping, divergence, limits
     await assert.rejects(executeTask(task, map, 'Search', factory, model, trace, signal, 1), /action limit/);
     const controller = new AbortController(); controller.abort();
     await assert.rejects(executeTask(task, map, 'Search', factory, model, trace, controller.signal));
-    const crawlerModel: Model = { call: async (_t, _n, schema) => schema.parse({ values: ['apple'] }) };
-    const discovered = await crawl(url, factory, crawlerModel, trace, signal, () => {}, { states: 5, depth: 2 });
+    const crawlerModel: Model = { call: async (_t, _n, schema, _instruction, input: any) =>
+      schema.parse({ selections: input.choices.map((choice: { id: string; task: string }) => ({ choiceId: choice.id, task: choice.task, value: '' })), reason: 'Test all links' }) };
+    const discovered = await crawl(url, 'Find help', crawlerModel, trace, signal, () => {}, { states: 5, depth: 2 });
     assert.equal(discovered.status, 'limited');
     assert.ok(discovered.transitions.some(t => t.status === 'observed'));
     assert.ok(discovered.transitions.some(t => t.status === 'unexplored'));
-    assert.ok(discovered.states.some(s => s.snapshot.text.includes('Found apple')));
+    assert.ok(discovered.states.some(s => s.snapshot.url.includes('view=help')));
     validateMap(discovered);
   } finally { await browser.close(); await new Promise<void>(resolve => server.close(() => resolve())); await rm(dir, { recursive: true, force: true }); }
 });
