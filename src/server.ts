@@ -2,6 +2,7 @@ import './telemetry.js';
 import express from 'express';
 import { z } from 'zod';
 import { fileURLToPath } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { config, missingCredentials } from './config.js';
 import { validateMap, flowTree } from './flow.js';
 import { EventLog, Sentry } from './telemetry.js';
@@ -25,8 +26,17 @@ function send(runId: string, name: string, payload: unknown) {
 const runner = new Runner(log, (run: Run) => send(run.id, 'run', run));
 log.on('event', (event: LogEvent) => send(event.runId, 'log', event));
 app.get('/api/config', (_req, res) => res.json({ maxWorkers: config.maxWorkers, missingCredentials: missingCredentials() }));
+app.get('/api/demo-tree', async (_req, res) => {
+  try {
+    const map = validateMap(JSON.parse(await readFile('logs/tree_demo.json', 'utf8')));
+    // Only send graph labels and connections, not recorded DOM or browser data.
+    res.json({ status: map.status, notes: [], rootId: map.rootId,
+      states: map.states.map(({ id, task, snapshot }) => ({ id, task, snapshot: { title: snapshot.title, url: snapshot.url } })),
+      transitions: map.transitions.map(({ id, from, to, status, reason }) => ({ id, from, to, status, reason })) });
+  } catch { res.status(503).json({ error: 'Could not load logs/tree_demo.json. Restore a valid demo flow map and refresh.' }); }
+});
 const requestSchema = z.object({ prompt: z.string().trim().min(1).max(8000), targetUrl: z.string().url(),
-  maxWorkers: z.number().int().min(1).max(config.maxWorkers), flowMap: z.unknown().optional(), testSingleAction: z.boolean().default(false) });
+  maxWorkers: z.number().int().min(1).max(config.maxWorkers), flowMap: z.unknown().optional(), testSingleAction: z.boolean().default(false), previewGraph: z.boolean().default(false) });
 app.post('/api/runs', (req, res) => {
   try {
     const input = requestSchema.parse(req.body);
@@ -36,7 +46,7 @@ app.post('/api/runs', (req, res) => {
     const map = input.flowMap === undefined ? undefined : validateMap(input.flowMap, url.href);
     const missing = missingCredentials();
     if (missing.length) { res.status(503).json({ error: `Set these environment variables: ${missing.join(', ')}` }); return; }
-    res.status(202).json(runner.start(input.prompt, url.href, input.maxWorkers, map, input.testSingleAction));
+    res.status(202).json(runner.start(input.prompt, url.href, input.maxWorkers, map, input.testSingleAction, input.previewGraph));
   } catch (error) { res.status(String(error).includes('already active') ? 409 : 400).json({ error: String(error) }); }
 });
 app.get('/api/runs/:id', (req, res) => {
@@ -55,6 +65,10 @@ app.get('/api/runs/:id/tree', (req, res) => {
   res.json(flowTree(map));
 });
 app.post('/api/runs/:id/cancel', (req, res) => res.status(runner.cancel(req.params.id) ? 202 : 404).json({ ok: true }));
+app.post('/api/runs/:id/graph-preview/complete', (req, res) => {
+  const ok = runner.completeGraphPreview(req.params.id);
+  res.status(ok ? 200 : 409).json(ok ? { ok } : { error: 'Run is not waiting for a graph preview' });
+});
 app.get('/api/runs/:id/events', async (req, res) => {
   const run = runner.runs.get(req.params.id);
   if (!run) { res.status(404).json({ error: 'Run not found' }); return; }

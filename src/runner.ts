@@ -11,17 +11,19 @@ import { executeNodeSequence } from './execution/node-sequence.js';
 import { EventLog, Trace } from './telemetry.js';
 import { type FlowMap, type Run, type Identity } from './types.js';
 import { executeSingleAction } from './worker.js';
+import { GraphPreview } from './graph-preview.js';
 
 export class Runner {
   runs = new Map<string, Run>();
+  private graphPreview = new GraphPreview();
   private active?: { run: Run; controller: AbortController; done: Promise<void> };
   constructor(public log: EventLog, private publish: (run: Run) => void) {}
-  start(prompt: string, targetUrl: string, maxWorkers: number, supplied?: FlowMap, testSingleAction = false) {
+  start(prompt: string, targetUrl: string, maxWorkers: number, supplied?: FlowMap, testSingleAction = false, previewGraph = false) {
     if (this.active) throw new Error('A run is already active');
     const run: Run = { id: randomUUID(), prompt, targetUrl, maxWorkers, status: 'starting', sessions: [], findings: [], results: [] };
     const controller = new AbortController();
     this.runs.set(run.id, run);
-    const done = Promise.resolve().then(() => this.execute(run, controller, supplied, testSingleAction)).catch(async error => {
+    const done = Promise.resolve().then(() => this.execute(run, controller, supplied, testSingleAction, previewGraph)).catch(async error => {
       run.status = 'failed';
       await this.log.write({ runId: run.id, agentId: 'system', role: 'system' }, 'run.failed', { error: String(error) }).catch(() => undefined);
     }).finally(() => { this.active = undefined; this.publish(run); });
@@ -33,8 +35,17 @@ export class Runner {
     this.active.controller.abort(new Error('Cancelled by user'));
     this.active.run.status = 'cancelling'; this.publish(this.active.run); return true;
   }
+  completeGraphPreview(id: string) {
+    const run = this.runs.get(id);
+    if (!run) return false;
+    // A repeated acknowledgement after a lost HTTP response is harmless.
+    if (run.graphPreviewComplete) return true;
+    if (run.status !== 'previewing' || !this.graphPreview.complete(id)) return false;
+    run.graphPreviewComplete = true;
+    return true;
+  }
   async shutdown() { if (this.active) { this.active.controller.abort(new Error('Server shutdown')); await this.active.done; } }
-  private async execute(run: Run, controller: AbortController, supplied?: FlowMap, testSingleAction = false) {
+  private async execute(run: Run, controller: AbortController, supplied?: FlowMap, testSingleAction = false, previewGraph = false) {
     const signal = controller.signal;
     const trace = (role: Identity['role'], agentId: string = role) => new Trace(this.log, { runId: run.id, agentId, role });
     const system = trace('system');
@@ -114,6 +125,13 @@ export class Runner {
       // created until map resolution and orchestration have both completed.
       const map = await resolveFlowMap();
       signal.throwIfAborted();
+      if (previewGraph) {
+        await system.event('graph.preview.started', { states: map.states.length });
+        const presented = this.graphPreview.wait(run.id, signal);
+        run.status = 'previewing'; this.publish(run);
+        await presented;
+        await system.event('graph.preview.finished', { states: map.states.length });
+      }
       const plan = await createPlan(map);
       signal.throwIfAborted();
       run.status = 'running'; this.publish(run);

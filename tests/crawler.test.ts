@@ -21,7 +21,8 @@ test('crawler cancellation stops branch decisions after a navigation', async () 
   } };
   try {
     await assert.rejects(crawl('https://worker.example/', 'Search cameras', model, trace, controller.signal,
-      () => controller.abort(), { states: 10, depth: 5 }, 'tests/fixtures/crawler-goal'), { name: 'AbortError' });
+      map => { if (map.transitions.some(edge => edge.status === 'observed')) controller.abort(); },
+      { states: 10, depth: 5 }, 'tests/fixtures/crawler-goal'), { name: 'AbortError' });
     assert.equal(calls, 1);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

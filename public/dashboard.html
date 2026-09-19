@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="dark">
   <title>Watchtower — Control Room</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/graph.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -37,6 +38,13 @@
         <div class="agent-caption"><strong id="agent-message">All quiet on the browser front.</strong><span id="agent-detail">Give the team a task. I'll keep an eye on things.</span></div>
         <span class="desk-label">YOUR LITTLE LOOKOUT</span>
       </div>
+      <details id="discovery-graph" class="discovery-graph">
+        <summary>Demo tree <span id="graph-progress" role="status">Demo tree ready to load</span></summary>
+        <p class="graph-caption">A replay of tree_demo.json, one node at a time. Live discovery and worker results are shown separately.</p>
+        <div class="graph-controls"><button id="graph-fit" type="button">Fit tree</button><button id="graph-zoom-out" type="button" aria-label="Zoom out">−</button><span id="graph-zoom">100%</span><button id="graph-zoom-in" type="button" aria-label="Zoom in">+</button><span>Solid branches · dashed references</span></div>
+        <div id="graph-viewport" class="graph-viewport" tabindex="0" aria-label="Discovery graph, scroll to explore"><div id="graph-stage"><div id="graph-canvas" class="graph-canvas"></div></div></div>
+        <p id="graph-coverage" class="graph-caption"></p>
+      </details>
       <div id="empty-monitors" class="monitor-grid" aria-label="No browser sessions yet">
         <div class="empty-monitor"><div class="monitor-header"><span>CAM 01 <span class="muted">/ UNASSIGNED</span></span><span class="standby">STANDBY</span></div><div class="empty-screen"><span class="screen-cross">+</span><span>Waiting for an agent</span><small>Your live browser will appear here</small></div><div class="monitor-footer"><span>NO SESSION CONNECTED</span><span>— : — : —</span></div></div>
         <div class="empty-monitor"><div class="monitor-header"><span>CAM 02 <span class="muted">/ UNASSIGNED</span></span><span class="standby">STANDBY</span></div><div class="empty-screen"><span class="screen-cross">+</span><span>Room for another perspective</span><small>Each worker gets its own browser</small></div><div class="monitor-footer"><span>NO SESSION CONNECTED</span><span>— : — : —</span></div></div>

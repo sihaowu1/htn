@@ -13,6 +13,83 @@ import { validateMap } from '../src/flow.js';
 import type { Model } from '../src/model.js';
 import type { FlowMap } from '../src/types.js';
 
+test('real Chromium: dashboard always animates the demo tree independently of the live map',
+  { skip: process.env.RUN_BROWSER_TESTS !== '1', timeout: 30_000 }, async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const page = await browser.newPage();
+      const errors: string[] = [];
+      page.on('pageerror', error => errors.push(error.message));
+      const run = { id: 'preview-test', status: 'previewing', sessions: [], results: [], findings: [],
+        map: { status: 'provided', notes: ['Imported map'], rootId: 'root',
+          states: ['root', 'left', 'right'].map(id => ({ id, task: `Visit ${id}`, snapshot: { title: id, url: 'https://target.example/' } })),
+          transitions: [
+            { id: 'a', from: 'root', to: 'left', status: 'observed', reason: '' },
+            { id: 'b', from: 'root', to: 'right', status: 'observed', reason: '' },
+            { id: 'cycle', from: 'right', to: 'root', status: 'observed', reason: '' },
+          ] } };
+      const demoMap = structuredClone(run.map);
+      run.map.states = run.map.states.slice(0, 1);
+      run.map.transitions = [];
+      let acknowledgements = 0;
+      await page.addInitScript(() => {
+        (window as any).EventSource = class {
+          addEventListener() {}
+          close() {}
+        };
+      });
+      await page.route('http://dashboard.test/**', async route => {
+        const path = new URL(route.request().url()).pathname;
+        if (path === '/api/config') return route.fulfill({ json: { maxWorkers: 5, missingCredentials: [] } });
+        if (path === '/api/demo-tree') return route.fulfill({ json: demoMap });
+        if (path === '/api/runs') return route.fulfill({ json: run });
+        if (path.endsWith('/graph-preview/complete')) {
+          acknowledgements++;
+          assert.equal(await page.locator('#discovery-graph').evaluate((el: HTMLDetailsElement) => el.open), false);
+          return route.fulfill({ json: { ok: true } });
+        }
+        const file = path === '/' ? 'dashboard.html' : path.slice(1);
+        return route.fulfill({ body: await readFile(new URL(`../public/${file}`, import.meta.url)),
+          contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
+      });
+      await page.goto('http://dashboard.test/');
+      await page.clock.install();
+      await page.fill('#url', 'https://target.example/');
+      await page.fill('#prompt', 'Browse');
+      await page.click('#start');
+      await page.waitForFunction(() => document.querySelectorAll('.graph-node').length === 1);
+      assert.equal(await page.locator('#discovery-graph').evaluate((el: HTMLDetailsElement) => el.open), true);
+      assert.equal(acknowledgements, 0);
+      await page.clock.runFor(1100);
+      assert.equal(await page.locator('.graph-node').count(), 2);
+      assert.equal(acknowledgements, 0);
+      await page.clock.runFor(1100);
+      assert.deepEqual(await page.locator('.graph-node small').allTextContents(), ['01 / root', '02 / left', '03 / right']);
+      assert.equal(await page.locator('.graph-edge').count(), 3);
+      const positions = await page.locator('.graph-node').evaluateAll(nodes => nodes.map(node => ({
+        x: parseFloat((node as HTMLElement).style.left), y: parseFloat((node as HTMLElement).style.top),
+      })));
+      assert.equal(positions[1].y, positions[2].y, 'siblings share a level');
+      assert.ok(positions[1].x + 220 < positions[2].x, 'sibling cards do not overlap');
+      assert.equal(positions[0].x, (positions[1].x + positions[2].x) / 2, 'parent is centered over its children');
+      assert.ok(positions[0].y < positions[1].y);
+      assert.equal(await page.locator('.graph-reference').count(), 1, 'cycle remains a reference, not a new child');
+      assert.equal(acknowledgements, 0);
+      await page.clock.runFor(2200);
+      await page.waitForFunction(() => !(document.getElementById('discovery-graph') as HTMLDetailsElement).open);
+      assert.equal(acknowledgements, 1);
+      await page.click('#discovery-graph > summary');
+      assert.equal(await page.locator('.graph-node').count(), 3);
+      await page.click('#graph-fit');
+      const sizes = await page.evaluate(() => ({
+        stage: document.getElementById('graph-stage')!.getBoundingClientRect().width,
+        viewport: document.getElementById('graph-viewport')!.clientWidth,
+      }));
+      assert.ok(sizes.stage <= sizes.viewport, 'fit tree keeps sibling branches within viewport width');
+      assert.deepEqual(errors, []);
+    } finally { await browser.close(); }
+  });
+
 test('live view selects the navigated page instead of the default blank tab', () => {
   const pages = [
     { url: 'about:blank', debuggerFullscreenUrl: 'https://debug.example/blank' },

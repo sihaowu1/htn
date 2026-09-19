@@ -54,6 +54,7 @@ export type Identity = { runId: string; agentId: string; role: 'crawler' | 'orch
 export type LogEvent = Identity & { seq: number; time: string; type: string; data: unknown };
 export type SessionInfo = { agentId: string; role: string; sessionId: string; liveUrl: string; status: string; instruction?: string };
 export type Run = {
+  graphPreviewComplete?: boolean;
   id: string; prompt: string; targetUrl: string; maxWorkers: number;
   status: string; sessions: SessionInfo[]; map?: FlowMap; plan?: Plan;
   findings: Report[]; results: { name: string; status: string; reason: string }[];

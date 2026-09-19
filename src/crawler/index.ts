@@ -111,6 +111,7 @@ export async function crawl(startUrl: string, goal: string, model: Model, trace:
     const root = await inspect(active.page);
     activeStateId = map.rootId;
     map.states.push({ id: map.rootId, snapshot: mappedSnapshot(root, local.origin, startUrl), depth: 0, task: `Start: ${goal}` });
+    update(map);
     const replayPaths = new Map<string, Action[][]>([[map.rootId, []]]);
     const fingerprints = new Map<string, string>([[root.fingerprint, map.rootId]]);
     const localFingerprints = new Map<string, string>([[map.rootId, root.fingerprint]]);

@@ -8,6 +8,32 @@ import { EventLog, Trace } from '../src/telemetry.js';
 import { Observer } from '../src/observer.js';
 import type { Model } from '../src/model.js';
 import type { Report } from '../src/types.js';
+import { GraphPreview } from '../src/graph-preview.js';
+
+test('graph preview blocks continuation until its own run is acknowledged', async () => {
+  const preview = new GraphPreview();
+  let continued = false;
+  const pending = preview.wait('run', new AbortController().signal).then(() => { continued = true; });
+  await Promise.resolve();
+  assert.equal(continued, false);
+  assert.equal(preview.complete('other'), false);
+  assert.equal(continued, false);
+  assert.equal(preview.complete('run'), true);
+  await pending;
+  assert.equal(continued, true);
+  assert.equal(preview.complete('run'), false);
+});
+
+test('cancelled and abandoned graph previews reject without continuing', async () => {
+  const preview = new GraphPreview();
+  const controller = new AbortController();
+  const pending = preview.wait('cancelled', controller.signal);
+  controller.abort(new Error('Cancelled'));
+  await assert.rejects(pending, /Cancelled/);
+  assert.equal(preview.complete('cancelled'), false);
+  await assert.rejects(preview.wait('abandoned', new AbortController().signal, 5), /timed out/);
+  assert.equal(preview.complete('abandoned'), false);
+});
 
 test('session release is idempotent and failures retain session correlation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'agent-release-'));

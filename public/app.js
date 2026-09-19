@@ -21,6 +21,7 @@ let current, stream;
 const seen = new Set();
 const cards = new Map();
 const eventRows = new Map();
+const discoveryGraph = new DiscoveryGraph(id => request(`/api/runs/${id}/graph-preview/complete`, { method: 'POST' }));
 async function request(url, options) {
   const response = await fetch(url, options);
   const data = await response.json();
@@ -29,6 +30,7 @@ async function request(url, options) {
 }
 function render(run) {
   current = run.id;
+  discoveryGraph.update(run);
   $('status').textContent = run.status.replaceAll('_', ' ');
   $('status').title = `Run ${run.id}`;
   document.body.dataset.phase = run.status;
@@ -37,6 +39,7 @@ function render(run) {
   const messages = {
     starting: ['Getting the team ready.', 'Preparing a new run.'],
     discovering: ['A little look around first.', 'Mapping the paths your website can take.'],
+    previewing: ['Watch the paths take shape.', 'Finishing the discovery graph before the workers begin.'],
     planning: ['Finding the right paths.', 'Choosing what matters for your task.'],
     running: ['Eyes on the browsers.', 'The team is working through its assigned paths.'],
     cancelling: ['Bringing everyone back.', 'Stopping work and closing browser sessions.'],
@@ -50,7 +53,7 @@ function render(run) {
   const message = messages[run.status] || ['Keeping an eye on things.', 'Run updates will appear here.'];
   $('agent-message').textContent = message[0];
   $('agent-detail').textContent = message[1];
-  $('stop').disabled = !['starting', 'discovering', 'planning', 'running', 'cancelling'].includes(run.status);
+  $('stop').disabled = !['starting', 'discovering', 'previewing', 'planning', 'running', 'cancelling'].includes(run.status);
   $('start').disabled = !$('stop').disabled || run.status === 'observing';
   $('plan').textContent = JSON.stringify(run.plan || {}, null, 2);
   $('results').textContent = JSON.stringify(run.results, null, 2);
@@ -120,15 +123,16 @@ function render(run) {
 }
 $('form').addEventListener('submit', async event => {
   event.preventDefault(); $('error').textContent = ''; $('start').disabled = true;
+  discoveryGraph.reset(true);
   try {
     const file = $('mapFile').files[0];
-    const data = { targetUrl: $('url').value, prompt: $('prompt').value, maxWorkers: Number($('workers').value), testSingleAction: $('singleAction').checked,
+    const data = { targetUrl: $('url').value, prompt: $('prompt').value, maxWorkers: Number($('workers').value), testSingleAction: $('singleAction').checked, previewGraph: true,
       ...(file ? { flowMap: JSON.parse(await file.text()) } : {}) };
     const run = await request('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
     stream?.close(); seen.clear(); eventRows.clear(); cards.clear(); $('sessions').replaceChildren(); $('events').textContent = '';
     $('download').hidden = true; $('tree').textContent = 'Waiting for discovery';
     localStorage.setItem('lastRun', run.id); render(run); connect(run.id);
-  } catch (error) { $('error').textContent = error.message; $('start').disabled = false; }
+  } catch (error) { discoveryGraph.reset(); $('error').textContent = error.message; $('start').disabled = false; }
 });
 function connect(id) {
   stream = new EventSource(`/api/runs/${id}/events`);
