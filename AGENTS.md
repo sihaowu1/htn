@@ -6,7 +6,7 @@ This project turns a user's website-testing request into coordinated browser-age
 
 The central product behavior is task-scoped exploration: a request to test search should stop at search results, even when the website also offers checkout. Discovery coverage, execution results, and observer conclusions must remain distinguishable.
 
-The goal of this project is to save the logs/events of the successful and failed workers to be able to get training data to improve future models, as well as debug the current website in case a failure is caused by a website feature. 
+The goal of this project is to save the logs/events of the successful and failed workers to be able to get training data to improve future models, as well as debug the current website in case a failure is caused by a website feature. The workers perform multi-stage agentic work, which is a type of work where information tends to disappear or get confused between stages. Our project aims to recognize this as well as other mistakes of the AI. 
 
 ## Architecture and responsibilities
 
