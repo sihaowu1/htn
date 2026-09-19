@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { BrowserSession } from './browser.js';
 import { config } from './config.js';
-import { crawl } from './crawler.js';
+import { crawl } from './crawler/index.js';
 import { flowTree, pool, validateMap, validatePlan } from './flow.js';
 import { OpenAIModel } from './model.js';
 import { Observer } from './observer.js';
@@ -69,38 +69,60 @@ export class Runner {
         await system.event('run.finished', { status: run.status, results: run.results });
         return;
       }
-      if (supplied) { run.map = validateMap(supplied, run.targetUrl); await system.event('map.imported', { status: run.map.status }); }
-      else {
+      const resolveFlowMap = async () => {
         run.status = 'discovering'; this.publish(run);
-        const t = trace('crawler');
-        const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
-        const session = await open(t, discoverySignal);
-        try {
-          run.map = await t.span('discovery', () => crawl(run.targetUrl, url => session.page(url), model, t, discoverySignal,
-            map => { run.map = map; this.publish(run); }));
-        } finally { await session.close(); }
-      }
+        await system.event('pipeline.phase.started', { phase: 'sitemap_or_crawler' });
+        if (supplied) {
+          run.map = validateMap(supplied, run.targetUrl);
+          await system.event('map.imported', { status: run.map.status });
+        } else {
+          const t = trace('crawler');
+          const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
+          const session = await open(t, discoverySignal);
+          try {
+            run.map = await t.span('discovery', () => crawl(run.targetUrl, url => session.page(url), model, t, discoverySignal,
+              map => { run.map = map; this.publish(run); }));
+          } finally { await session.close(); }
+        }
+        await system.event('pipeline.phase.finished', { phase: 'sitemap_or_crawler', mapStatus: run.map.status });
+        return run.map;
+      };
+      const createPlan = async (map: FlowMap) => {
+        signal.throwIfAborted();
+        run.status = 'planning'; this.publish(run);
+        await system.event('pipeline.phase.started', { phase: 'orchestrator' });
+        const planningMap = { ...map, states: map.states.map(s => ({ ...s, snapshot: { ...s.snapshot, dom: undefined } })) };
+        const plan = validatePlan(map, await model.call(trace('orchestrator'), 'assign_paths', planSchema,
+          'You are the orchestrator. Analyze the supplied discovered flow tree and user task; you cannot browse. Assign distinct contiguous root-to-destination paths using only observed transitions. Stop at the earliest state satisfying the task. Explicitly skip unrelated branches, even if discovery explored them. Do not append checkout to a search task. Shared prefixes are allowed; duplicate paths and loops are not. Include exact stopping conditions grounded in observable page evidence. Return no paths and explain if no discovered path can satisfy the task. Paths with zero transitions may inspect the root.',
+          { task: run.prompt, map: planningMap, tree: flowTree(map), maxConcurrentWorkers: run.maxWorkers }, signal));
+        run.plan = plan;
+        await trace('orchestrator').event('plan.created', plan);
+        await system.event('pipeline.phase.finished', { phase: 'orchestrator', paths: plan.paths.length });
+        return plan;
+      };
+
+      // These awaits are intentional phase barriers. No worker session can be
+      // created until map resolution and orchestration have both completed.
+      const map = await resolveFlowMap();
       signal.throwIfAborted();
-      run.status = 'planning'; this.publish(run);
-      const planningMap = { ...run.map!, states: run.map!.states.map(s => ({ ...s, snapshot: { ...s.snapshot, dom: undefined } })) };
-      run.plan = validatePlan(run.map!, await model.call(trace('orchestrator'), 'assign_paths', planSchema,
-        'You are the orchestrator. Analyze the supplied discovered flow tree and user task; you cannot browse. Assign distinct contiguous root-to-destination paths using only observed transitions. Stop at the earliest state satisfying the task. Explicitly skip unrelated branches, even if discovery explored them. Do not append checkout to a search task. Shared prefixes are allowed; duplicate paths and loops are not. Include exact stopping conditions grounded in observable page evidence. Return no paths and explain if no discovered path can satisfy the task. Paths with zero transitions may inspect the root.',
-        { task: run.prompt, map: planningMap, tree: flowTree(run.map!), maxConcurrentWorkers: run.maxWorkers }, signal));
-      await trace('orchestrator').event('plan.created', run.plan);
+      const plan = await createPlan(map);
+      signal.throwIfAborted();
       run.status = 'running'; this.publish(run);
-      await pool(run.plan.paths, run.maxWorkers, signal, async (task, index) => {
+      await system.event('pipeline.phase.started', { phase: 'workers', paths: plan.paths.length });
+      await pool(plan.paths, run.maxWorkers, signal, async (task, index) => {
         const t = trace('worker', `worker-${index + 1}`);
         const workerSignal = AbortSignal.any([signal, AbortSignal.timeout(config.workerTimeout)]);
         let session: BrowserSession | undefined;
         try {
           session = await open(t, workerSignal);
-          const result = await t.span('worker', () => executeTask(task, run.map!, run.prompt, url => session!.page(url), model, t, workerSignal));
+          const result = await t.span('worker', () => executeTask(task, map, run.prompt, url => session!.page(url), model, t, workerSignal));
           run.results.push(result);
         } catch (error) {
           const result = { name: task.name, status: signal.aborted ? 'cancelled' : 'failed', reason: String(error) };
           run.results.push(result); await t.event('worker.failed', result);
         } finally { await session?.close(); this.publish(run); }
       });
+      await system.event('pipeline.phase.finished', { phase: 'workers', results: run.results.length });
       signal.throwIfAborted();
       run.status = !run.results.length ? 'blocked' : run.results.every(r => r.status === 'succeeded') ? 'succeeded' : 'completed_with_failures';
       await system.event('run.finished', { status: run.status, results: run.results });
