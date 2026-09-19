@@ -26,6 +26,7 @@
       main.innerHTML = `<div class="empty-state">Product not found. <a href="index.html">Back to store</a></div>`;
     } else {
       renderHeader(product.category);
+      const defaultVariant = findVariant(product);
 
       main.innerHTML = `
         <div class="breadcrumb">
@@ -34,12 +35,26 @@
           ${product.name}
         </div>
         <div class="product-detail">
-          <div>${productThumbHtml(product)}</div>
+          <div>
+            <div id="product-visual">${productThumbHtml(product, "", defaultVariant)}</div>
+            <div class="variant-panel">
+              <div class="variant-heading"><strong>Color</strong><span id="selected-color">${defaultVariant.name}</span></div>
+              <div class="variant-options" role="radiogroup" aria-label="Choose a color">
+                ${product.variants.map((variant) => `
+                  <button class="variant-option${variant.id === defaultVariant.id ? " selected" : ""}" type="button" role="radio" aria-checked="${variant.id === defaultVariant.id}" data-variant-id="${variant.id}" title="${variant.name}${variant.popular ? " - Most popular" : ""}">
+                    <span class="color-swatch" style="background:${variant.hex}"></span>
+                    <span>${variant.name}</span>
+                    ${variant.popular ? '<small>Most popular</small>' : ""}
+                  </button>
+                `).join("")}
+              </div>
+            </div>
+          </div>
           <div>
             <h1>${product.name}</h1>
             <div class="product-rating">★ ${product.rating.toFixed(1)} rating</div>
             <p>${product.blurb}</p>
-            <div class="product-price" id="unit-price">${formatPrice(product.price)}</div>
+            <div class="product-price" id="unit-price">${formatPrice(defaultVariant.price)}</div>
 
             <div class="qty-row">
               <label for="qty">Qty</label>
@@ -53,11 +68,26 @@
         </div>
       `;
 
+      let selectedVariant = defaultVariant;
+      document.querySelectorAll(".variant-option").forEach((button) => {
+        button.addEventListener("click", () => {
+          selectedVariant = findVariant(product, button.dataset.variantId);
+          document.getElementById("product-visual").innerHTML = productThumbHtml(product, "", selectedVariant);
+          document.getElementById("unit-price").textContent = formatPrice(selectedVariant.price);
+          document.getElementById("selected-color").textContent = selectedVariant.name;
+          document.querySelectorAll(".variant-option").forEach((option) => {
+            const isSelected = option === button;
+            option.classList.toggle("selected", isSelected);
+            option.setAttribute("aria-checked", String(isSelected));
+          });
+        });
+      });
+
       document.getElementById("add-to-cart-btn").addEventListener("click", () => {
         const qtyInput = document.getElementById("qty");
         let qty = parseInt(qtyInput.value, 10);
         if (!Number.isFinite(qty) || qty < 1) qty = 1;
-        addToCart(product.id, qty);
+        addToCart(getCartItemKey(product.id, selectedVariant.id), qty);
         document.getElementById("cart-count").textContent = cartCount();
         const conf = document.getElementById("add-confirmation");
         conf.style.display = "block";

@@ -23,7 +23,7 @@
     function renderCheckout() {
       renderHeader("All");
       const cart = getCart();
-      const entries = Object.entries(cart).filter(([id]) => findProduct(id));
+      const entries = Object.entries(cart).filter(([key]) => parseCartItemKey(key) || findProduct(key));
       const content = document.getElementById("checkout-content");
 
       if (entries.length === 0) {
@@ -31,11 +31,26 @@
         return;
       }
 
+      const user = getCurrentUser();
+      if (!user) {
+        content.innerHTML = `
+          <div class="auth-required">
+            <h2>Sign in to continue</h2>
+            <p>Your cart is saved. Sign in or create an account before checkout.</p>
+            <a class="btn yellow" href="${authUrl("checkout.html")}">Sign in or create an account</a>
+          </div>
+        `;
+        return;
+      }
+
       const total = cartTotal();
       const summaryRows = entries
-        .map(([id, qty]) => {
-          const p = findProduct(id);
-          return `<div class="summary-row"><span>${p.name} × ${qty}</span><span>${formatPrice(p.price * qty)}</span></div>`;
+        .map(([key, qty]) => {
+          const item = parseCartItemKey(key) || { product: findProduct(key), variant: null };
+          const p = item.product;
+          const variant = item.variant;
+          const price = variant?.price || p.price;
+          return `<div class="summary-row"><span>${p.name}${variant ? ` (${variant.name})` : ""} × ${qty}</span><span>${formatPrice(price * qty)}</span></div>`;
         })
         .join("");
 

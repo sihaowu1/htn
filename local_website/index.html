@@ -11,7 +11,22 @@
   <nav class="category-nav" id="category-nav"></nav>
 
   <main>
+    <section class="deal-rail" id="deal-rail" aria-label="Featured deals" hidden>
+      <a class="deal-tile deal-tile-dark" href="product.html?id=p1">
+        <img src="images_for_mock_up/vantage-tv.png" alt="Vantage 55 inch 4K OLED TV" />
+      </a>
+      <a class="deal-tile deal-tile-lilac" href="product.html?id=p17">
+        <img src="images_for_mock_up/aeropad-air.png" alt="AeroPad Air 11 tablet" />
+      </a>
+      <a class="deal-tile deal-tile-lilac" href="product.html?id=p9">
+        <img src="images_for_mock_up/orbit-buds.png" alt="Orbit Buds Pro wireless earbuds" />
+      </a>
+      <a class="deal-tile deal-tile-green" href="product.html?id=p15">
+        <img src="images_for_mock_up/tidyhome-vacuum.png" alt="TidyHome robot vacuum" />
+      </a>
+    </section>
     <div class="breadcrumb" id="results-label"></div>
+    <div class="search-suggestion" id="search-suggestion" hidden></div>
     <div class="product-grid" id="product-grid"></div>
     <div class="empty-state" id="empty-state" hidden>No products found. Try a different search or category.</div>
   </main>
@@ -25,23 +40,73 @@
       return new URLSearchParams(window.location.search);
     }
 
+    function editDistance(left, right) {
+      const distances = Array.from({ length: right.length + 1 }, (_, index) => index);
+
+      for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+        let diagonal = distances[0];
+        distances[0] = leftIndex;
+
+        for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+          const above = distances[rightIndex];
+          const cost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
+          distances[rightIndex] = Math.min(
+            distances[rightIndex] + 1,
+            distances[rightIndex - 1] + 1,
+            diagonal + cost
+          );
+          diagonal = above;
+        }
+      }
+
+      return distances[right.length];
+    }
+
+    function searchableTerms(product) {
+      return [product.name, product.category, ...(product.searchTerms || [])]
+        .map((term) => term.toLowerCase());
+    }
+
+    function findSuggestion(query) {
+      const terms = [...new Set(PRODUCTS.flatMap(searchableTerms))];
+      const maxDistance = query.length < 5 ? 1 : 2;
+      return terms
+        .map((term) => ({ term, distance: editDistance(query, term) }))
+        .filter(({ term, distance }) => distance <= maxDistance && term !== query)
+        .sort((left, right) => left.distance - right.distance || left.term.length - right.term.length)[0]?.term;
+    }
+
     function renderProducts() {
       const params = getParams();
       const q = (params.get("q") || "").trim().toLowerCase();
       const category = params.get("category") || "All";
+      const suggestion = document.getElementById("search-suggestion");
+      document.getElementById("deal-rail").hidden = Boolean(q) || category !== "All";
 
       renderHeader(category);
 
       let results = PRODUCTS.filter((p) => category === "All" || p.category === category);
       if (q) {
         results = results.filter(
-          (p) => p.name.toLowerCase().includes(q) || p.category.toLowerCase().includes(q)
+          (p) => searchableTerms(p).some((term) => term.includes(q))
         );
+      }
+
+      const correctedQuery = !results.length && q ? findSuggestion(q) : "";
+      if (correctedQuery) {
+        results = PRODUCTS.filter((p) => category === "All" || p.category === category).filter(
+          (p) => searchableTerms(p).some((term) => term.includes(correctedQuery))
+        );
+        suggestion.hidden = false;
+        suggestion.textContent = `Did you mean "${correctedQuery}"?`;
+      } else {
+        suggestion.hidden = true;
+        suggestion.textContent = "";
       }
 
       const label = document.getElementById("results-label");
       if (q) {
-        label.textContent = `Search results for "${q}" (${results.length})`;
+        label.textContent = `Search results for "${correctedQuery || q}" (${results.length})`;
       } else {
         label.textContent = `${category} (${results.length})`;
       }

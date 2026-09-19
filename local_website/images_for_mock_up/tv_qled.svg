@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">Crestline QLED TV</title>
+  <desc id="desc">A slim television with a bright blue and magenta abstract display on a white studio background.</desc>
+  <defs>
+    <linearGradient id="screen" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#08a5d8"/><stop offset=".48" stop-color="#6420d5"/><stop offset="1" stop-color="#fb3a77"/></linearGradient>
+    <filter id="shadow"><feGaussianBlur stdDeviation="15"/></filter>
+  </defs>
+  <rect width="1200" height="900" fill="#fff"/>
+  <ellipse cx="600" cy="735" rx="360" ry="22" fill="#8c96a3" opacity=".3" filter="url(#shadow)"/>
+  <g transform="translate(110 175)">
+    <rect width="980" height="510" rx="14" fill="#20252d"/>
+    <rect x="20" y="20" width="940" height="450" fill="url(#screen)"/>
+    <path d="M20 340 C220 250 320 420 510 310 S800 190 960 275 V470 H20Z" fill="#ff5d41" opacity=".65"/>
+    <path d="M20 430 C260 320 420 500 650 365 S850 310 960 355 V470 H20Z" fill="#103bd1" opacity=".7"/>
+    <path d="M390 510 L460 510 L410 570 L340 570Z M590 510 L660 510 L710 570 L640 570Z" fill="#222831"/>
+  </g>
+</svg>
