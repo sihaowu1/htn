@@ -1,13 +1,32 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BrowserSession } from '../src/browser.js';
 import { EventLog, Trace } from '../src/telemetry.js';
 import { Observer } from '../src/observer.js';
 import type { Model } from '../src/model.js';
-import type { Report } from '../src/types.js';
+import type { Report, FlowMap } from '../src/types.js';
+import { readOrDiscoverTree } from '../src/tree-reader.js';
+
+test('tree reader crawls only on a missing file, persists it, and rejects invalid caches without crawling', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'tree-reader-'));
+  const file = join(dir, 'tree_demo.json');
+  const map: FlowMap = { version: 1, startUrl: 'https://test.example/', rootId: 'root', status: 'provided', notes: [],
+    states: [{ id: 'root', depth: 0, snapshot: { url: 'https://test.example/', title: '', text: 'Home', dom: '', elements: [], unsupported: [], fingerprint: '' } }], transitions: [] };
+  let crawls = 0;
+  const discover = async () => { crawls++; return structuredClone(map); };
+  try {
+    assert.equal((await readOrDiscoverTree(map.startUrl, discover, file)).source, 'crawler');
+    const cached = await readOrDiscoverTree(map.startUrl, discover, file);
+    assert.equal(cached.source, 'cache'); assert.deepEqual(cached.map, map); assert.equal(crawls, 1);
+    await assert.rejects(readOrDiscoverTree('https://other.example/', discover, file), /target URL/);
+    await writeFile(file, '{bad json');
+    await assert.rejects(readOrDiscoverTree(map.startUrl, discover, file));
+    assert.equal(crawls, 1);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
 
 test('session release is idempotent and failures retain session correlation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'agent-release-'));

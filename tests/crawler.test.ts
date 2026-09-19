@@ -9,6 +9,79 @@ import { planRelevantTree, validateMap } from '../src/flow.js';
 import { EventLog, Trace } from '../src/telemetry.js';
 import type { Model } from '../src/model.js';
 
+test('crawler switches the real mock store to sign in and uses tokenized fixture credentials', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'crawler-login-'));
+  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
+  const trace = new Trace(log, { runId: 'crawl', agentId: 'crawler', role: 'crawler' });
+  let calls = 0;
+  const model: Model = { call: async (_t, _n, schema, _i, input: any) => {
+    calls++;
+    assert.ok(!input.page.url.includes('auth.html'), 'auth decisions use the fixed sign-in flow');
+    const done = /Hello,\s*johnsmith/i.test(input.page.text);
+    const link = input.choices.find((choice: any) => choice.description === 'a Sign in');
+    return schema.parse({ goalSatisfied: done, selections: done ? [] : [{ choiceId: link.id, task: link.task, value: '' }], reason: done ? 'Hello johnsmith' : 'Sign in' });
+  } };
+  try {
+    const map = await crawl('https://worker.example/', 'Sign in with the test identity', model, trace, new AbortController().signal,
+      () => {}, { states: 10, depth: 8 });
+    assert.equal(calls, 2);
+    assert.equal(map.status, 'complete');
+    const transitions = map.transitions.filter(transition => transition.status === 'observed');
+    assert.equal(transitions.length, 3, 'open auth, switch tab, fill and submit sign in');
+    assert.deepEqual(transitions[2].actions.map(action => action.kind), ['fill', 'fill', 'click']);
+    assert.equal(transitions[2].actions[0].value, 'JohnSmith@example.com');
+    assert.equal(transitions[2].actions[1].value, '[fixture-login-password]');
+    assert.ok(map.states.some(state => state.goalAssessment?.satisfied));
+    assert.equal(JSON.stringify(await log.read('crawl')).includes('123456'), false);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('different cart histories remain separate through identical category pages and form entry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'crawler-cart-'));
+  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
+  const trace = new Trace(log, { runId: 'crawl', agentId: 'crawler', role: 'crawler' });
+  const goal = 'Add a product and enter test payment information';
+  const model: Model = { call: async (_t, _n, schema, _i, input: any) => {
+    const relevant = input.choices.filter((choice: any) => !/Long route/.test(choice.description));
+    const done = relevant.some((choice: any) => choice.currentValue === 'test-payment');
+    return schema.parse({ goalSatisfied: done, progress: done ? 1 : input.depth / 10,
+      selections: done ? [] : relevant.map((choice: any) => ({ choiceId: choice.id, task: choice.task,
+        value: choice.acceptsValue ? 'test-payment' : '' })), reason: done ? 'Product in cart and test payment entered' : 'Continue toward checkout' });
+  } };
+  try {
+    const map = await crawl('https://worker.example/', goal, model, trace, new AbortController().signal, () => {},
+      { states: 30, depth: 20 }, 'tests/fixtures/crawler-cart');
+    validateMap(map);
+    const categories = map.states.filter(state => state.snapshot.url.includes('view=category'));
+    assert.equal(categories.length, 2);
+    assert.equal(categories[0].snapshot.fingerprint, categories[1].snapshot.fingerprint, 'DOMs really are identical');
+    const terminals = map.states.filter(state => state.goalAssessment?.satisfied);
+    assert.equal(terminals.length, 2);
+    assert.ok(terminals.some(state => state.snapshot.text.includes('Cart: TV')));
+    assert.ok(terminals.some(state => state.snapshot.text.includes('Cart: Controller')));
+    assert.ok(terminals.every(state => state.snapshot.elements.some(element => element.value === 'test-payment')));
+    assert.ok(planRelevantTree(map, goal).paths.every(path => path.completion === 'goal'));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('default discovery depth stops at ten and records the remaining route', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'crawler-depth-'));
+  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
+  const trace = new Trace(log, { runId: 'crawl', agentId: 'crawler', role: 'crawler' });
+  const model: Model = { call: async (_t, _n, schema, _i, input: any) => schema.parse({
+    goalSatisfied: input.page.text.includes('Long route complete'),
+    selections: input.choices.filter((choice: any) => /Long route|Next step/.test(choice.description))
+      .map((choice: any) => ({ choiceId: choice.id, task: choice.task, value: '' })), reason: 'Follow the long route',
+  }) };
+  try {
+    const map = await crawl('https://worker.example/', 'Reach the end of the long route', model, trace,
+      new AbortController().signal, () => {}, undefined, 'tests/fixtures/crawler-cart');
+    assert.equal(Math.max(...map.states.map(state => state.depth)), 10);
+    assert.equal(map.status, 'limited');
+    assert.ok(map.transitions.some(transition => transition.status === 'unexplored' && transition.reason === 'Depth limit reached'));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('crawler cancellation stops branch decisions after a navigation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'crawler-cancel-'));
   const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();

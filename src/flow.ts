@@ -25,10 +25,6 @@ export function matchesState(expected: Snapshot, actual: Snapshot) {
     && !!expected.text.trim() && actual.text.includes(expected.text.trim())
     && expected.elements.every(e => actual.elements.some(a => a.selector === e.selector && (!e.label || a.label === e.label)));
 }
-export function reachesGoal(goal: string, snapshot: Snapshot) {
-  if (!/\b(?:check\s?out|payment|pay|purchase|order)\b/i.test(goal)) return true;
-  return /checkout|payment|confirmation/i.test(new URL(snapshot.url).pathname);
-}
 export function taskTransitions(map: FlowMap, task: Task): Transition[] {
   let at = map.rootId;
   const seen = new Set([at]);
@@ -41,11 +37,22 @@ export function taskTransitions(map: FlowMap, task: Task): Transition[] {
 }
 export function validatePlan(map: FlowMap, plan: Plan): Plan {
   const paths = new Set<string>();
+  const namedPaths = new Map<string, string>();
   const used = new Set<string>();
   for (const task of plan.paths) {
     taskTransitions(map, task);
-    const key = JSON.stringify(task.transitionIds);
-    if (paths.has(key)) throw new Error('Duplicate assigned path');
+    const key = JSON.stringify([task.transitionIds, task.exploreFrom || null]);
+    if (task.exploreFrom) {
+      const prefix = taskTransitions(map, task);
+      const at = prefix.at(-1)?.to || map.rootId;
+      const branch = map.transitions.find(transition => transition.id === task.exploreFrom);
+      if (!branch || branch.from !== at || branch.status !== 'unexplored' || branch.to !== null) throw new Error('Invalid exploratory branch');
+      used.add(branch.id);
+    }
+    if (namedPaths.has(task.name)) throw new Error('Duplicate task name');
+    if (task.repeatOf && namedPaths.get(task.repeatOf) !== key) throw new Error('Repeat must reference an earlier identical path');
+    if (paths.has(key) && !task.repeatOf) throw new Error('Duplicate assigned path');
+    namedPaths.set(task.name, key);
     paths.add(key); task.transitionIds.forEach(id => used.add(id));
     if (!task.stopCondition.trim()) throw new Error('Missing stop condition');
   }
@@ -61,13 +68,21 @@ export function planRelevantTree(map: FlowMap, goal: string): Plan {
   const paths: Plan['paths'] = [];
   const walk = (stateId: string, transitionIds: string[], seen: Set<string>) => {
     const outgoing = map.transitions.filter(t => t.from === stateId);
+    const state = map.states.find(candidate => candidate.id === stateId)!;
+    const assessment = state.goalAssessment?.goal === goal ? state.goalAssessment : undefined;
     const usable = outgoing.filter(t => t.status === 'observed' && t.to && !seen.has(t.to));
-    if (!usable.length) {
+    if (assessment?.satisfied || !usable.length || transitionIds.length >= 30) {
+      const limitation = assessment?.satisfied ? '' : [assessment?.reason || 'No confirmed goal endpoint was discovered.',
+        ...outgoing.filter(t => t.status !== 'observed').map(t => t.reason),
+        ...(transitionIds.length >= 30 ? ['Worker path length limit reached'] : []),
+        ...map.notes.filter(note => /limit|timeout|stopped/i.test(note))].filter(Boolean).join(' ');
       if (transitionIds.length || stateId === map.rootId) paths.push({
         name: `Goal path ${paths.length + 1}`,
         transitionIds,
         instructions: goal,
-        stopCondition: `Observable page evidence that this path satisfies the user goal: ${goal}`,
+        stopCondition: assessment?.satisfied ? `Observable page evidence that this path satisfies the user goal: ${goal}`
+          : `Execute the furthest discovered route, then report incomplete unless the full goal is verified: ${goal}`,
+        completion: assessment?.satisfied ? 'goal' : 'partial', limitation,
       });
       return;
     }
