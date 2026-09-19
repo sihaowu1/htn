@@ -1,10 +1,4 @@
 const $ = id => document.getElementById(id);
-$('nav').addEventListener('click', event => {
-  const button = event.target.closest('button[data-view]');
-  if (!button) return;
-  for (const b of $('nav').querySelectorAll('button')) b.classList.toggle('active', b === button);
-  for (const view of document.querySelectorAll('.view')) view.classList.toggle('active', view.id === `view-${button.dataset.view}`);
-});
 let current, stream;
 const seen = new Set();
 const cards = new Map();

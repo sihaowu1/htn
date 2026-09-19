@@ -1,0 +1,16 @@
+<!doctype html><html><head><title>Test shop</title></head><body>
+<h1>Test shop</h1>
+<form id="search"><label>Search <input id="query" name="q"></label><button type="submit">Search</button></form>
+<a href="/?view=help">Help</a>
+<script>
+const params = new URLSearchParams(location.search);
+if (params.has('q')) {
+  document.body.innerHTML = '<h1>' + (params.get('q') === 'apple' ? 'Found apple' : 'No results') + '</h1><a href="/?view=checkout">Checkout</a><a href="/">Home</a>';
+} else if (params.get('view') === 'checkout') {
+  document.body.innerHTML = '<h1>Checkout</h1><button onclick="document.body.innerHTML=\'<h1>Order placed</h1>\'">Place order</button>';
+} else if (params.get('view') === 'help') {
+  document.body.innerHTML = '<h1>Help</h1><a href="/">Home</a>';
+} else {
+  document.querySelector('form').onsubmit = e => { e.preventDefault(); location.href = '/?q=' + encodeURIComponent(document.querySelector('input').value); };
+}
+</script></body></html>
