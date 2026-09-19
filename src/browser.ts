@@ -49,12 +49,17 @@ export class BrowserSession {
   constructor(private sdk: Browserbase, private browser: Browser, public info: SessionInfo, private trace: Trace,
     private publish: (info: SessionInfo) => void = () => {}) {}
   static async open(trace: Trace, publish: (info: SessionInfo) => void): Promise<BrowserSession> {
+    // Browserbase is used strictly as a remote Chromium provider. Do not use
+    // sdk.agents or any Browserbase task/agent endpoint here: navigation,
+    // interaction, observation, and decisions belong to our own workers.
     const sdk = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY, timeout: 30_000, maxRetries: 1 });
     const session = await sdk.sessions.create({ projectId: process.env.BROWSERBASE_PROJECT_ID!, api_timeout: 1800,
       userMetadata: { ...trace.identity } });
     trace.identity.sessionId = session.id;
     try {
       await trace.event('session.created', { sessionId: session.id });
+      // The only browser-control channel is Playwright over the session's CDP
+      // endpoint. Browserbase does not receive a task or control the agent.
       const browser = await chromium.connectOverCDP(session.connectUrl, { timeout: 30_000 });
       const info: SessionInfo = { agentId: trace.identity.agentId, role: trace.identity.role, sessionId: session.id, liveUrl: '', status: 'running' };
       const owned = new BrowserSession(sdk, browser, info, trace, publish);

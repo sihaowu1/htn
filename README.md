@@ -6,7 +6,7 @@
    npm ci
    ```
 
-2. Copy `.env.example` to `.env`. Set `OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and `SENTRY_DSN`. Change `OPENAI_MODEL` if needed for your account.
+2. Copy `.env.example` to `.env`. Set `OPENAI_API_KEY`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and `SENTRY_DSN`. Change `OPENAI_MODEL` if needed for your account. Browserbase is used only to provision isolated cloud Chromium sessions; this project controls them with Playwright over CDP and does not use Browserbase AI Agents.
 
 3. Add and start your own disposable target website in `local_website/` (left empty). Expose its port using your tunnel tool, for example:
 
@@ -26,7 +26,7 @@
    ngrok http 127.0.0.1:8080
    ```
 
-   We NEED Ngrok because we need to give Browserbase a reachable public HTTP(S) url that can be used (browser base cant connect to our localhost) so it must be this. 
+   The target needs a reachable public HTTP(S) URL because the cloud browser cannot connect to the app's localhost directly.
 
 4. Start our project app and open http://localhost:3000:
 

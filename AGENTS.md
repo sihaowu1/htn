@@ -8,6 +8,8 @@ The central product behavior is task-scoped exploration: a request to test searc
 
 The goal of this project is to save the logs/events of the successful and failed workers to be able to get training data to improve future models, as well as debug the current website in case a failure is caused by a website feature. The workers perform multi-stage agentic work, which is a type of work where information tends to disappear or get confused between stages. Our project aims to recognize this as well as other mistakes of the AI. 
 
+Since we're observing AI agent behavior, we do not use Browserbase's AI agents. We only use Browserbase as a cloud browser with which our agents interact with via Playwright and CDP (Chrome DevTools Protocol). 
+
 ## Architecture and responsibilities
 
 - **Discovery:** `src/crawler.ts` explores from a common starting state. `scripts/dom-snapshot.js` extracts rendered DOM observations. `src/flow.ts` represents and validates states, transitions, and paths. Website flows may have any number of branches; repeated states and cycles use references rather than infinite expansion.
