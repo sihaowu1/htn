@@ -86,10 +86,17 @@ export class Runner {
         } else {
           const crawler = await harness.register_agent_execution(runCtx, { agent_id: 'crawler' });
           const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
-          run.map = await Sentry.startSpan({ name: 'discovery', op: 'agent',
-            attributes: { run_id: run.id, agent_execution_id: crawler.agent_execution_id } }, () =>
-            harness.wrapToolCall(crawler, () => crawl(run.targetUrl, run.prompt, model, harness, crawler, discoverySignal,
-              map => { run.map = map; this.publish(run); }), { name: 'discovery' }));
+          try {
+            run.map = await Sentry.startSpan({ name: 'discovery', op: 'agent',
+              attributes: { run_id: run.id, agent_execution_id: crawler.agent_execution_id } }, () =>
+              harness.wrapToolCall(crawler, () => crawl(run.targetUrl, run.prompt, model, harness, crawler, discoverySignal,
+                map => { run.map = map; this.publish(run); }), { name: 'discovery' }));
+          } catch (error) {
+            if (signal.aborted || !run.map) throw error;
+            const note = `Discovery stopped at the ${config.crawlTimeout} ms crawl timeout; unexplored branches remain.`;
+            run.map = { ...run.map, status: 'limited', notes: [...run.map.notes, note] };
+            await emit(crawler, 'discovery.timeout', { note, states: run.map.states.length, transitions: run.map.transitions.length });
+          }
           await mkdir('logs', { recursive: true });
           await writeFile('logs/bestbuy_tree.json', JSON.stringify(run.map, null, 2) + '\n', 'utf8');
           await emit(system, 'map.saved', { file: 'logs/bestbuy_tree.json' });

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
-import { OpenAIModel } from '../src/model.js';
+import { OpenAIModel, type ResponseSession } from '../src/model.js';
 import { Harness, MemoryAdapter } from '../src/sdk/index.js';
 
 async function fixture() {
@@ -15,6 +15,35 @@ async function fixture() {
 function eventsOf(adapter: MemoryAdapter, type: string) {
   return [...adapter.events.values()].filter(e => e.event_type === type);
 }
+
+test('crawl conversations chain validated Responses and remain isolated', async () => {
+  const { adapter, harness, agent } = await fixture();
+  try {
+    const requests: any[] = [];
+    let invalid = false;
+    const model = new OpenAIModel();
+    (model as any).client = { responses: { parse: async (body: unknown) => {
+      requests.push(body);
+      return { id: `response-${requests.length}`, output_parsed: invalid ? { done: 'bad' } : { done: false }, usage: {} };
+    } } };
+    const session: ResponseSession = {};
+    const call = (current: ResponseSession) => model.call(harness, agent, 'choose', z.object({ done: z.boolean() }),
+      'Choose.', { stateId: requests.length }, new AbortController().signal, { reasoningEffort: 'low', session: current });
+    await call(session);
+    await call(session);
+    assert.equal(requests[0].store, true);
+    assert.equal(requests[0].previous_response_id, undefined);
+    assert.equal(requests[1].previous_response_id, 'response-1');
+    assert.equal(requests[1].instructions, requests[0].instructions);
+    invalid = true;
+    await assert.rejects(call(session));
+    assert.equal(session.previousResponseId, 'response-2');
+    invalid = false;
+    await call({});
+    assert.equal(requests[3].previous_response_id, undefined);
+    assert.ok(eventsOf(adapter, 'model.request').some(event => (event.metadata as any).previousResponseId === 'response-1'));
+  } finally { await adapter.close(); }
+});
 
 test('reasoning calls use Responses structured output', async () => {
   const { adapter, harness, agent } = await fixture();
