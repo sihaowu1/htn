@@ -1,0 +1,195 @@
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
+import { validateCatalogMetadata } from './catalog.js';
+import { AgentExecutionContext, RunContext } from './context.js';
+import { redact } from './redact.js';
+import {
+  attachArtifactInputSchema,
+  emitEventInputSchema,
+  eventLinkSchema,
+  eventSchema,
+  finishExecutionInputSchema,
+  MetadataTooLargeError,
+  recordEventLinkInputSchema,
+  recordToolCallInputSchema,
+  registerAgentInputSchema,
+  SchemaValidationError,
+  startRunInputSchema,
+  wrapToolCallOptionsSchema,
+  type AgentExecution,
+  type AttachArtifactInput,
+  type EmitEventInput,
+  type Event,
+  type EventLink,
+  type FinishExecutionInput,
+  type RecordEventLinkInput,
+  type RecordToolCallInput,
+  type RegisterAgentInput,
+  type Run,
+  type StartRunInput,
+  type WrapToolCallOptions,
+} from './types.js';
+
+export const DEFAULT_MAX_METADATA_BYTES = 32_768;
+
+export interface StoreAdapter {
+  storeRun(run: Run): Promise<void>;
+  storeAgentExecution(execution: AgentExecution): Promise<void>;
+  storeEvent(event: Event): Promise<void>;
+  storeEventLink(link: EventLink): Promise<void>;
+  close(): Promise<void>;
+}
+
+function parse<T>(schema: z.ZodType<T>, input: unknown, what: string): T {
+  try {
+    return schema.parse(input);
+  } catch (error) {
+    if (error instanceof z.ZodError) throw new SchemaValidationError(`Invalid ${what}: ${error.message}`, error.issues);
+    throw error;
+  }
+}
+
+export function metadataByteSize(metadata: unknown): number {
+  return Buffer.byteLength(JSON.stringify(metadata), 'utf8');
+}
+
+export class Harness {
+  readonly maxMetadataBytes: number;
+  constructor(readonly adapter: StoreAdapter, options?: { maxMetadataBytes?: number }) {
+    this.maxMetadataBytes = options?.maxMetadataBytes ?? DEFAULT_MAX_METADATA_BYTES;
+  }
+
+  async start_run(raw: StartRunInput): Promise<RunContext> {
+    const input = parse(startRunInputSchema, raw, 'start_run input');
+    const ctx = new RunContext(input.goal);
+    await this.adapter.storeRun(ctx.toRun());
+    return ctx;
+  }
+
+  async register_agent_execution(ctx: RunContext, raw: RegisterAgentInput): Promise<AgentExecutionContext> {
+    const input = parse(registerAgentInputSchema, raw, 'register_agent_execution input');
+    const agentCtx = ctx.registerAgentExecution(input);
+    await this.adapter.storeAgentExecution(agentCtx.toExecution());
+    return agentCtx;
+  }
+
+  private buildEvent(agentCtx: AgentExecutionContext, eventType: string, metadata: Record<string, unknown>,
+    opts?: { session_id?: string; trace_id?: string; span_id?: string; parent_span_id?: string }): Event {
+    const limit = this.maxMetadataBytes;
+    const redacted = redact(metadata) as Record<string, unknown>;
+    const size = metadataByteSize(redacted);
+    if (size > limit) throw new MetadataTooLargeError(size, limit);
+    const now = new Date().toISOString();
+    return parse(eventSchema, {
+      event_id: randomUUID(),
+      run_id: agentCtx.run_id,
+      agent_execution_id: agentCtx.agent_execution_id,
+      ...(opts?.session_id ?? agentCtx.getSessionId() ? { session_id: opts?.session_id ?? agentCtx.getSessionId() } : {}),
+      occurred_at: now,
+      sequence_number: agentCtx.nextSequence(),
+      event_type: eventType,
+      ...(opts?.trace_id ? { trace_id: opts.trace_id } : {}),
+      ...(opts?.span_id ? { span_id: opts.span_id } : {}),
+      ...(opts?.parent_span_id ? { parent_span_id: opts.parent_span_id } : {}),
+      metadata: redacted,
+      schema_version: 1,
+    }, 'event envelope');
+  }
+
+  async emit_event(agentCtx: AgentExecutionContext, raw: EmitEventInput): Promise<Event> {
+    const input = parse(emitEventInputSchema, raw, 'emit_event input');
+    if (input.validate_metadata) validateCatalogMetadata(input.event_type, input.metadata);
+    const event = this.buildEvent(agentCtx, input.event_type, input.metadata, input);
+    await this.adapter.storeEvent(event);
+    return event;
+  }
+
+  async record_tool_call(agentCtx: AgentExecutionContext, raw: RecordToolCallInput): Promise<{ started: Event; finished: Event }> {
+    const input = parse(recordToolCallInputSchema, raw, 'record_tool_call input');
+    const started = this.buildEvent(agentCtx, 'tool.started', { name: input.name, ...(input.arguments !== undefined ? { arguments: input.arguments } : {}) });
+    await this.adapter.storeEvent(started);
+    const finishedType = input.error !== undefined ? 'tool.failed' : 'tool.completed';
+    const finished = this.buildEvent(agentCtx, finishedType, {
+      name: input.name,
+      ...(input.result !== undefined ? { result: input.result } : {}),
+      ...(input.error !== undefined ? { error: typeof input.error === 'string' ? input.error : JSON.stringify(input.error) } : {}),
+      ...(input.duration_ms !== undefined ? { duration_ms: input.duration_ms } : {}),
+    });
+    await this.adapter.storeEvent(finished);
+    await this.record_event_link({ run_id: agentCtx.run_id, source_event_id: finished.event_id, target_event_id: started.event_id, relationship_type: 'consumes_output' });
+    return { started, finished };
+  }
+
+  async wrapToolCall<T>(agentCtx: AgentExecutionContext, fn: () => Promise<T>, raw: WrapToolCallOptions): Promise<T> {
+    const opts = parse(wrapToolCallOptionsSchema, raw, 'wrapToolCall options');
+    const started = this.buildEvent(agentCtx, 'tool.started', {
+      name: opts.name,
+      ...(opts.arguments !== undefined ? { arguments: opts.arguments } : {}),
+    });
+    await this.adapter.storeEvent(started);
+    const begun = Date.now();
+    try {
+      const result = await fn();
+      const duration_ms = Date.now() - begun;
+      const finished = await this.finishToolCall(agentCtx, opts.name, duration_ms, { result });
+      await this.record_event_link({ run_id: agentCtx.run_id, source_event_id: finished.event_id, target_event_id: started.event_id, relationship_type: 'consumes_output' });
+      return result;
+    } catch (error) {
+      const duration_ms = Date.now() - begun;
+      const finished = await this.finishToolCall(agentCtx, opts.name, duration_ms, {}, error);
+      await this.record_event_link({ run_id: agentCtx.run_id, source_event_id: finished.event_id, target_event_id: started.event_id, relationship_type: 'consumes_output' });
+      throw error;
+    }
+  }
+
+  private async finishToolCall(agentCtx: AgentExecutionContext, name: string, duration_ms: number,
+    outcome: { result?: unknown }, error?: unknown): Promise<Event> {
+    if (error !== undefined) {
+      const failed = this.buildEvent(agentCtx, 'tool.failed', {
+        name, error: error instanceof Error ? error.message : String(error), duration_ms,
+      });
+      await this.adapter.storeEvent(failed);
+      return failed;
+    }
+    const limit = this.maxMetadataBytes;
+    const safeResult = redact(outcome.result);
+    const resultSize = metadataByteSize({ result: safeResult });
+    if (resultSize > limit) {
+      const artifactId = randomUUID();
+      const artifact = this.buildEvent(agentCtx, 'artifact.created', {
+        artifact_id: artifactId, kind: 'tool-result', mime_type: 'application/json', size_bytes: resultSize,
+      });
+      await this.adapter.storeEvent(artifact);
+      const completed = this.buildEvent(agentCtx, 'tool.completed', {
+        name, result_ref: artifactId, duration_ms,
+        note: `Result exceeded the ${limit} byte metadata limit and was recorded as an artifact reference.`,
+      });
+      await this.adapter.storeEvent(completed);
+      return completed;
+    }
+    const completed = this.buildEvent(agentCtx, 'tool.completed', { name, result: safeResult, duration_ms });
+    await this.adapter.storeEvent(completed);
+    return completed;
+  }
+
+  async record_event_link(raw: RecordEventLinkInput): Promise<EventLink> {
+    const input = parse(recordEventLinkInputSchema, raw, 'record_event_link input');
+    const link = parse(eventLinkSchema, input, 'event link');
+    await this.adapter.storeEventLink(link);
+    return link;
+  }
+
+  async attach_artifact(agentCtx: AgentExecutionContext, raw: AttachArtifactInput): Promise<Event> {
+    const input = parse(attachArtifactInputSchema, raw, 'attach_artifact input');
+    const event = this.buildEvent(agentCtx, 'artifact.created', { ...input });
+    await this.adapter.storeEvent(event);
+    return event;
+  }
+
+  async finish_execution(agentCtx: AgentExecutionContext, raw: FinishExecutionInput): Promise<Event> {
+    const input = parse(finishExecutionInputSchema, raw, 'finish_execution input');
+    const event = this.buildEvent(agentCtx, 'agent.completed', { ...input });
+    await this.adapter.storeEvent(event);
+    return event;
+  }
+}
