@@ -49,5 +49,6 @@ The current target assumption is an unauthenticated, disposable website with rep
 ## Repository conventions
 
 - Keep `local_website/` empty unless the user explicitly asks to populate it. Do not put demo content or test fixtures there. Setup recreates it because Git does not track empty directories.
+- `local_website/` currently holds a mock Best Buy store at the user's request. `examples/local-website-flow-map.json` is its expected flow map in the crawler's format (`version: 1`); update it when the store's pages or selectors change.
 - Keep `README.md` exclusively for quick-start instructions. Put project and contributor guidance here; put supporting examples under `examples/`.
 - Update this guide when architecture, commands, contracts, or operating assumptions change. Describe implemented behavior separately from future capabilities.
