@@ -6,6 +6,8 @@ This project turns a user's website-testing request into coordinated browser-age
 
 The central product behavior is task-scoped exploration: a request to test search should stop at search results, even when the website also offers checkout. Discovery coverage, execution results, and observer conclusions must remain distinguishable.
 
+The goal of this project is to save the logs/events of the successful and failed workers to be able to get training data to improve future models, as well as debug the current website in case a failure is caused by a website feature. 
+
 ## Architecture and responsibilities
 
 - **Discovery:** `src/crawler.ts` explores from a common starting state. `scripts/dom-snapshot.js` extracts rendered DOM observations. `src/flow.ts` represents and validates states, transitions, and paths. Website flows may have any number of branches; repeated states and cycles use references rather than infinite expansion.
