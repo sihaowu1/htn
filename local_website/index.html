@@ -11,6 +11,20 @@
   <nav class="category-nav" id="category-nav"></nav>
 
   <main>
+    <section class="deal-rail" id="deal-rail" aria-label="Featured deals" hidden>
+      <a class="deal-tile deal-tile-dark" href="product.html?id=p1">
+        <img src="images_for_mock_up/vantage-tv.png" alt="Vantage 55 inch 4K OLED TV" />
+      </a>
+      <a class="deal-tile deal-tile-lilac" href="product.html?id=p17">
+        <img src="images_for_mock_up/aeropad-air.png" alt="AeroPad Air 11 tablet" />
+      </a>
+      <a class="deal-tile deal-tile-lilac" href="product.html?id=p9">
+        <img src="images_for_mock_up/orbit-buds.png" alt="Orbit Buds Pro wireless earbuds" />
+      </a>
+      <a class="deal-tile deal-tile-green" href="product.html?id=p15">
+        <img src="images_for_mock_up/tidyhome-vacuum.png" alt="TidyHome robot vacuum" />
+      </a>
+    </section>
     <div class="breadcrumb" id="results-label"></div>
     <div class="search-suggestion" id="search-suggestion" hidden></div>
     <div class="product-grid" id="product-grid"></div>
@@ -67,6 +81,7 @@
       const q = (params.get("q") || "").trim().toLowerCase();
       const category = params.get("category") || "All";
       const suggestion = document.getElementById("search-suggestion");
+      document.getElementById("deal-rail").hidden = Boolean(q) || category !== "All";
 
       renderHeader(category);
 

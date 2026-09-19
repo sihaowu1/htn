@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">Meadow 11 Chromebook</title>
+  <desc id="desc">A compact silver Chromebook with a calm blue display on a warm neutral studio background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#f0eee9"/><stop offset="1" stop-color="#b5bdc4"/></linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#8ad9e7"/><stop offset=".55" stop-color="#3874b9"/><stop offset="1" stop-color="#24366e"/></linearGradient>
+    <filter id="shadow"><feGaussianBlur stdDeviation="20"/></filter>
+  </defs>
+  <rect width="1200" height="900" fill="url(#bg)"/>
+  <ellipse cx="600" cy="730" rx="370" ry="45" fill="#59616b" opacity=".35" filter="url(#shadow)"/>
+  <g transform="translate(235 170) rotate(5 360 260)">
+    <rect x="95" y="40" width="570" height="390" rx="24" fill="#4a535d"/>
+    <rect x="120" y="65" width="520" height="340" rx="8" fill="url(#screen)"/>
+    <path d="M75 440 H685 L830 590 Q845 608 815 614 H-55 Q-83 608-68 590Z" fill="#c4cbd0"/>
+    <path d="M175 466 H590 L650 545 H115Z" fill="#69737d"/>
+    <rect x="350" y="535" width="105" height="9" rx="5" fill="#edf0f2"/>
+  </g>
+</svg>
