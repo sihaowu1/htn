@@ -4,6 +4,7 @@ import Browserbase from '@browserbasehq/sdk';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { Action, Snapshot, SessionInfo } from './types.js';
 import type { Trace } from './telemetry.js';
+import { FIXTURE_LOGIN_PASSWORD, FIXTURE_PASSWORD_TOKEN } from './fixture-credentials.js';
 
 const snapshotScript = await readFile(new URL('../scripts/dom-snapshot.js', import.meta.url), 'utf8');
 
@@ -21,6 +22,9 @@ export async function settle(page: Page) {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
 }
+export function pageLiveViewUrl(pages: Array<{ url: string; debuggerFullscreenUrl: string }>, pageUrl: string) {
+  return pages.find(candidate => candidate.url === pageUrl)?.debuggerFullscreenUrl || '';
+}
 export async function perform(page: Page, action: Action, trace: Trace, signal: AbortSignal) {
   signal.throwIfAborted();
   await trace.span('browser.action', async () => {
@@ -29,9 +33,12 @@ export async function perform(page: Page, action: Action, trace: Trace, signal: 
     if (await locator.count() !== 1 || !await locator.isVisible()) throw new Error(`Action selector must match one visible element: ${action.selector}`);
     const target = await locator.evaluate(el => ({ type: el.getAttribute('type'), actionable: el.matches('a[href],button,input,select,textarea,[role="button"],[role="link"]') }));
     if (!target.actionable) throw new Error('Target is not an actionable element');
-    if (target.type === 'password' || target.type === 'file') throw new Error('Unsupported input type');
+    if (target.type === 'file') throw new Error('Unsupported input type');
+    if (target.type === 'password' && (action.kind !== 'fill' || action.value !== FIXTURE_PASSWORD_TOKEN)) {
+      throw new Error('Password inputs only accept the configured fixture credential token');
+    }
     if (action.kind === 'click') await locator.click({ timeout: 10_000 });
-    if (action.kind === 'fill') await locator.fill(action.value, { timeout: 10_000 });
+    if (action.kind === 'fill') await locator.fill(action.value === FIXTURE_PASSWORD_TOKEN ? FIXTURE_LOGIN_PASSWORD : action.value, { timeout: 10_000 });
     if (action.kind === 'select') await locator.selectOption(action.value, { timeout: 10_000 });
     if (action.kind === 'press') {
       if (!['Enter', 'Tab', 'Space', 'Escape', 'ArrowDown', 'ArrowUp'].includes(action.value)) throw new Error('Unsupported key');
@@ -44,6 +51,8 @@ export async function perform(page: Page, action: Action, trace: Trace, signal: 
 }
 export class BrowserSession {
   private contexts = new Set<BrowserContext>();
+  private displayed?: { context: BrowserContext; liveUrl: string };
+  private deferredDisposals = new Set<BrowserContext>();
   private pending = new Set<Promise<unknown>>();
   private closePromise?: Promise<void>;
   constructor(private sdk: Browserbase, private browser: Browser, public info: SessionInfo, private trace: Trace,
@@ -63,8 +72,9 @@ export class BrowserSession {
       const browser = await chromium.connectOverCDP(session.connectUrl, { timeout: 30_000 });
       const info: SessionInfo = { agentId: trace.identity.agentId, role: trace.identity.role, sessionId: session.id, liveUrl: '', status: 'running' };
       const owned = new BrowserSession(sdk, browser, info, trace, publish);
-      try { info.liveUrl = (await sdk.sessions.debug(session.id)).debuggerFullscreenUrl; }
-      catch (error) { await trace.event('session.live_view.failed', { error: String(error) }); }
+      // Do not publish the session-level debugger URL here. At creation time it
+      // targets Browserbase's initial about:blank tab; page() publishes the URL
+      // for the page after navigation instead.
       publish(info);
       return owned;
     } catch (error) {
@@ -75,6 +85,10 @@ export class BrowserSession {
   async page(startUrl: string) {
     const context = await this.browser.newContext();
     this.contexts.add(context);
+    // Free ngrok endpoints show an interstitial warning to normal browsers.
+    // This header tells ngrok that the request is coming from an automated
+    // client, so discovery and workers see the target site immediately.
+    await context.setExtraHTTPHeaders({ 'ngrok-skip-browser-warning': 'true' });
     const origin = new URL(startUrl).origin;
     await context.route('**/*', async route => {
       const request = route.request();
@@ -96,20 +110,56 @@ export class BrowserSession {
     page.on('dialog', async dialog => { record('browser.dialog', { type: dialog.type(), message: dialog.message() }); await dialog.dismiss().catch(() => undefined); });
     page.on('popup', popup => { record('browser.unsupported', { reason: 'Popup closed; multi-tab flows are unsupported' }); void popup.close(); });
     try {
+      let pageLiveUrl = '';
       await this.trace.event('navigation.attempt', { url: startUrl });
       await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await settle(page);
-      try {
-        const debug = await this.sdk.sessions.debug(this.info.sessionId);
-        this.info.liveUrl = debug.pages.find(p => p.url === page.url())?.debuggerFullscreenUrl || debug.debuggerFullscreenUrl;
-        this.publish(this.info);
-      } catch (error) { await this.trace.event('session.live_view.failed', { error: String(error) }); }
-      return { page, dispose: async () => { await context.close(); this.contexts.delete(context); } };
+      // Use the live view for the actual page created in this context. The
+      // session-level URL can point at Browserbase's default about:blank tab.
+      let liveViewError: unknown;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          const debug = await this.sdk.sessions.debug(this.info.sessionId);
+          pageLiveUrl = pageLiveViewUrl(debug.pages, page.url());
+          if (pageLiveUrl) {
+            const previous = this.displayed;
+            this.displayed = { context, liveUrl: pageLiveUrl };
+            this.info.liveUrl = pageLiveUrl;
+            this.publish(this.info);
+            // Discovery uses fresh contexts to preserve replay isolation. Keep
+            // the old displayed context alive until its replacement is ready,
+            // then retire it without exposing the handoff in the UI.
+            if (previous && previous.context !== context && this.deferredDisposals.delete(previous.context)) {
+              await previous.context.close().catch(() => undefined);
+              this.contexts.delete(previous.context);
+            }
+            break;
+          } else if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error) {
+          liveViewError = error;
+          if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      }
+      if (!this.info.liveUrl && liveViewError) {
+        await this.trace.event('session.live_view.failed', { error: String(liveViewError) });
+      }
+      return { page, dispose: async () => {
+        if (this.displayed?.context === context) {
+          this.deferredDisposals.add(context);
+          return;
+        }
+        await context.close(); this.contexts.delete(context);
+      } };
     } catch (error) { await context.close(); this.contexts.delete(context); throw error; }
   }
   close() {
     return this.closePromise ??= (async () => {
+      this.info.liveUrl = '';
+      this.publish(this.info);
       await Promise.allSettled([...this.contexts].map(c => c.close()));
+      this.contexts.clear();
+      this.deferredDisposals.clear();
+      this.displayed = undefined;
       try {
         await this.sdk.sessions.update(this.info.sessionId, { projectId: process.env.BROWSERBASE_PROJECT_ID!, status: 'REQUEST_RELEASE' });
         this.info.status = 'closed';

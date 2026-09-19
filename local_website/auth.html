@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sign in - BestBuy Mock</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header" id="site-header"></header>
+  <nav class="category-nav" id="category-nav"></nav>
+
+  <main>
+    <div class="auth-shell">
+      <div class="auth-card">
+        <div class="auth-tabs" role="tablist" aria-label="Account actions">
+          <button class="auth-tab active" id="sign-in-tab" type="button" role="tab" aria-selected="true">Sign in</button>
+          <button class="auth-tab" id="create-account-tab" type="button" role="tab" aria-selected="false">Create an account</button>
+        </div>
+        <div id="auth-content"></div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="site-footer" id="site-footer"></footer>
+
+  <script src="products.js"></script>
+  <script src="app.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const returnTo = params.get("returnTo") || "index.html";
+    const existingUser = getCurrentUser();
+    const content = document.getElementById("auth-content");
+    const signInTab = document.getElementById("sign-in-tab");
+    const createAccountTab = document.getElementById("create-account-tab");
+
+    renderHeader("All");
+
+    function safeReturnTo() {
+      return returnTo.startsWith("http") ? "index.html" : returnTo;
+    }
+
+    function redirectAfterAuth() {
+      window.location.href = safeReturnTo();
+    }
+
+    function renderAuth(mode) {
+      const isCreate = mode === "create";
+      signInTab.classList.toggle("active", !isCreate);
+      createAccountTab.classList.toggle("active", isCreate);
+      signInTab.setAttribute("aria-selected", String(!isCreate));
+      createAccountTab.setAttribute("aria-selected", String(isCreate));
+      content.innerHTML = `
+        <h1>${isCreate ? "Create your account" : "Sign in"}</h1>
+        <p class="auth-note">Use a demo identity to keep your cart and checkout flow together.</p>
+        <form id="auth-form">
+          ${isCreate ? `
+            <div class="form-row">
+              <label for="name">Name</label>
+              <input id="name" name="name" type="text" autocomplete="name" required />
+            </div>
+          ` : ""}
+          <div class="form-row">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" value="${existingUser?.email || ""}" required />
+          </div>
+          <div class="form-row">
+            <label for="password">Password</label>
+            <input id="password" name="password" type="password" autocomplete="${isCreate ? "new-password" : "current-password"}" required />
+          </div>
+          <button class="btn yellow" type="submit">${isCreate ? "Create account" : "Sign in"}</button>
+        </form>
+        <div class="auth-status" id="auth-status" role="status" aria-live="polite"></div>
+        ${existingUser ? `<button class="text-button" id="sign-out-button" type="button">Sign out of ${existingUser.name}</button>` : ""}
+      `;
+
+      document.getElementById("auth-form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const form = new FormData(event.target);
+        const email = String(form.get("email")).trim().toLowerCase();
+        const name = isCreate ? String(form.get("name")).trim() : (existingUser?.name || email.split("@")[0]);
+        if (!name) return;
+        saveCurrentUser({ name, email });
+        redirectAfterAuth();
+      });
+
+      document.getElementById("sign-out-button")?.addEventListener("click", () => {
+        clearCurrentUser();
+        window.location.href = "index.html";
+      });
+    }
+
+    signInTab.addEventListener("click", () => renderAuth("sign-in"));
+    createAccountTab.addEventListener("click", () => renderAuth("create"));
+    renderAuth(existingUser ? "sign-in" : "create");
+  </script>
+</body>
+</html>

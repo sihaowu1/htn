@@ -15,10 +15,15 @@ test('session release is idempotent and failures retain session correlation', as
     const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
     const trace = new Trace(log, { runId: 'r', agentId: 'a', role: 'worker', sessionId: 's' });
     let releases = 0, closes = 0;
+    const publications: Array<{ liveUrl: string; status: string }> = [];
     const session = new BrowserSession({ sessions: { update: async () => { releases++; } } } as any,
-      { close: async () => { closes++; } } as any, { sessionId: 's', agentId: 'a', role: 'worker', liveUrl: '', status: 'running' }, trace);
+      { close: async () => { closes++; } } as any,
+      { sessionId: 's', agentId: 'a', role: 'worker', liveUrl: 'https://debug.example/page', status: 'running' }, trace,
+      info => publications.push({ liveUrl: info.liveUrl, status: info.status }));
     await Promise.all([session.close(), session.close(), session.close()]);
     assert.equal(releases, 1); assert.equal(closes, 1); assert.equal(session.info.status, 'closed');
+    assert.equal(publications[0].liveUrl, '');
+    assert.equal(publications.at(-1)?.status, 'closed');
     const failing = new BrowserSession({ sessions: { update: async () => { throw new Error('Offline'); } } } as any,
       { close: async () => { closes++; } } as any, { sessionId: 's', agentId: 'a', role: 'worker', liveUrl: '', status: 'running' }, trace);
     await failing.close();

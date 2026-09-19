@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">Forge 16 Pro Laptop</title>
+  <desc id="desc">A silver performance laptop with a colorful abstract display on a soft graphite studio background.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#d9e0e7"/><stop offset="1" stop-color="#7e8a97"/></linearGradient>
+    <linearGradient id="screen" x1="0" y1="1" x2="1" y2="0"><stop stop-color="#0b4f8a"/><stop offset=".45" stop-color="#e74d35"/><stop offset="1" stop-color="#f5b52f"/></linearGradient>
+    <filter id="shadow"><feGaussianBlur stdDeviation="22"/></filter>
+  </defs>
+  <rect width="1200" height="900" fill="url(#bg)"/>
+  <ellipse cx="610" cy="730" rx="420" ry="52" fill="#2b3540" opacity=".42" filter="url(#shadow)"/>
+  <g transform="translate(210 130) rotate(-6 400 300)">
+    <path d="M130 100 Q140 70 175 66 L720 66 Q750 70 755 104 L790 470 Q792 500 760 505 L185 505 Q155 500 153 472Z" fill="#303942"/>
+    <path d="M174 105 L709 105 L742 455 L205 455Z" fill="url(#screen)"/>
+    <path d="M145 510 L770 510 L920 648 Q930 666 898 671 L44 671 Q15 666 31 645Z" fill="#b8c0c7"/>
+    <path d="M226 536 L685 536 L745 615 L160 615Z" fill="#424b54"/>
+    <rect x="405" y="600" width="120" height="10" rx="5" fill="#d5dbe0"/>
+  </g>
+</svg>

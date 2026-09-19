@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900" role="img" aria-labelledby="title desc">
+  <title id="title">Aperture LED TV</title>
+  <desc id="desc">A compact LED television with an orange, violet, and blue display on a bright studio background.</desc>
+  <defs>
+    <linearGradient id="screen" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a22"/><stop offset=".45" stop-color="#df1f7c"/><stop offset="1" stop-color="#154ed0"/></linearGradient>
+    <filter id="shadow"><feGaussianBlur stdDeviation="14"/></filter>
+  </defs>
+  <rect width="1200" height="900" fill="#fff"/>
+  <ellipse cx="600" cy="715" rx="315" ry="22" fill="#9ca4af" opacity=".3" filter="url(#shadow)"/>
+  <g transform="translate(170 210)">
+    <rect width="860" height="410" rx="13" fill="#242a33"/>
+    <rect x="18" y="18" width="824" height="355" fill="url(#screen)"/>
+    <circle cx="400" cy="190" r="145" fill="#ffdf54" opacity=".38"/>
+    <path d="M18 315 Q210 200 370 300 T842 260 V373 H18Z" fill="#0c55d6" opacity=".65"/>
+    <path d="M325 410 H400 L350 475 H275Z M460 410 H535 L585 475 H510Z" fill="#252b33"/>
+  </g>
+</svg>

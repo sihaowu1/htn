@@ -1,71 +1,54 @@
 <!doctype html>
 <html lang="en">
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Browser agents</title>
-<style>
-  * { box-sizing: border-box; }
-  body { font: 14px system-ui; margin: 0; display: flex; height: 100vh; }
-  nav { width: 160px; flex: none; border-right: 1px solid #aaa; padding: 12px 0; }
-  nav button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: none; border: none; padding: 10px 16px; font: inherit; cursor: pointer; }
-  nav button.active { background: #eee; font-weight: bold; }
-  /* TODO: light up .notif when a tab needs the user's attention (e.g. run finished, observer finding, error) */
-  nav .notif { width: 8px; height: 8px; border-radius: 50%; background: #b00020; }
-  main { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 16px; overflow: auto; }
-  #error { color: #b00020; }
-  h1 { font-size: 18px; margin: 0 0 8px; }
-  .view { display: none; flex: 1; min-height: 0; flex-direction: column; }
-  .view.active { display: flex; }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; border: 1px solid #aaa; padding: 8px; flex: 1; }
-  #sessions { display: flex; flex-wrap: wrap; gap: 12px; overflow: auto; }
-  .session { width: 600px; max-width: 100%; }
-  iframe { width: 100%; height: 380px; border: 1px solid #aaa; }
-  .chatbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; border-top: 1px solid #aaa; padding-top: 8px; margin-top: 8px; }
-  .chatbar input[type=url] { width: 220px; }
-  .chatbar textarea { flex: 1; min-width: 200px; height: 32px; }
-  .chatbar input[type=number] { width: 56px; }
-</style>
-<nav id="nav">
-  <button data-view="browsers" class="active">Browsers <span class="notif" hidden></span></button>
-  <button data-view="observer">Observer <span class="notif" hidden></span></button>
-  <button data-view="results">Results <span class="notif" hidden></span></button>
-  <button data-view="events">Events <span class="notif" hidden></span></button>
-</nav>
-<main>
-  <p id="status">Idle</p>
-  <p id="error" role="alert"></p>
-
-  <section id="view-browsers" class="view active">
-    <h1>Browsers</h1>
-    <details><summary>Flow tree and coverage</summary><pre id="tree">No discovery yet</pre></details>
-    <details><summary>Plan and skipped branches</summary><pre id="plan">No plan yet</pre></details>
-    <a id="download" hidden>Download flow map</a>
-    <div id="sessions"></div>
-    <form id="form" class="chatbar">
-      <input id="url" type="url" required placeholder="Target tunnel URL">
-      <textarea id="prompt" required placeholder="Test search with matching and no-result queries. Stop at the results."></textarea>
-      <label>Maximum simultaneous workers <input id="workers" type="number" min="1" max="5" value="2" required></label>
-      <label>Flow map <input id="mapFile" type="file" accept=".json,application/json"></label>
-      <label><input id="singleAction" type="checkbox"> TEST SINGLE ACTION (REMOVE BEFORE DEMO)</label>
-      <button id="start">Start</button>
-      <button id="stop" type="button" disabled>Stop</button>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>HTN — Observation room</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="HTN home"><span class="brand-mark">h</span> htn<span class="brand-period">.</span></a>
+    <div class="sidebar-caption">WORKSPACE / 01</div>
+    <nav id="nav" aria-label="Workspace">
+      <button data-view="browsers" class="active" aria-current="page"><span class="nav-icon">▦</span> Browsers <span class="notif" hidden></span><span class="nav-arrow">↗</span></button>
+      <button data-view="observer"><span class="nav-icon">◎</span> Observer <span class="notif" hidden></span></button>
+      <button data-view="results"><span class="nav-icon">☷</span> Results <span class="notif" hidden></span></button>
+      <button data-view="events"><span class="nav-icon">⌁</span> Events <span class="notif" hidden></span></button>
+    </nav>
+    <div class="sidebar-bottom"><span class="blue-dot"></span> A little oversight.<br><span>A lot of peace of mind.</span></div>
+  </aside>
+  <main>
+    <header class="topbar"><span>WORKSPACE <span class="slash">/</span> <span id="view-name">Browsers</span></span><span class="room-label"><span class="blue-dot"></span> OBSERVATION ROOM</span></header>
+    <div class="page-heading"><div><p class="eyebrow">YOUR AGENTS. ALL IN VIEW.</p><h1 id="page-title">Observation room<span>.</span></h1><p id="page-description">A front-row seat to every path, click, and discovery.</p></div><div class="status-pill"><span class="status-dot"></span><span id="status" role="status">Idle</span></div></div>
+    <p id="error" role="alert"></p>
+    <section id="view-browsers" class="view active" aria-label="Browser monitors">
+      <div class="section-bar"><h2><span class="blue-dot"></span> Browser feeds <span id="feed-count">00</span></h2><span class="quiet-label">ISOLATED SESSIONS · READ ONLY</span></div>
+      <div id="empty-monitors" class="monitor-grid" aria-label="No browser sessions yet">
+        <div class="empty-monitor"><div class="monitor-header"><span>CAM 01 <span class="muted">/ UNASSIGNED</span></span><span class="standby">STANDBY</span></div><div class="empty-screen"><span class="screen-cross">+</span><span>Waiting for an agent</span><small>Your live browser will appear here</small></div><div class="monitor-footer"><span>NO SESSION CONNECTED</span><span>— : — : —</span></div></div>
+        <div class="empty-monitor"><div class="monitor-header"><span>CAM 02 <span class="muted">/ UNASSIGNED</span></span><span class="standby">STANDBY</span></div><div class="empty-screen"><span class="screen-cross">+</span><span>Room for another perspective</span><small>Each worker gets its own browser</small></div><div class="monitor-footer"><span>NO SESSION CONNECTED</span><span>— : — : —</span></div></div>
+      </div>
+      <div id="sessions" class="monitor-grid"></div>
+      <div class="watch-desk">
+        <div class="desk-line"></div>
+        <div class="agent" aria-hidden="true"><div class="antenna"><i></i></div><div class="agent-head"><div class="agent-face"><i class="eye"></i><i class="eye"></i><span class="smile"></span></div></div><div class="agent-body"><span></span></div><div class="arm left"></div><div class="arm right"></div><div class="foot left"></div><div class="foot right"></div></div>
+        <div class="agent-caption"><strong id="agent-message">All quiet on the browser front.</strong><span id="agent-detail">Give the team a task. I'll keep an eye on things.</span></div>
+        <span class="desk-label">YOUR LITTLE LOOKOUT</span>
+      </div>
+      <div class="discovery-panels"><details><summary>Flow tree & coverage <span>↗</span></summary><pre id="tree">No discovery yet</pre></details><details><summary>Plan & skipped branches <span>↗</span></summary><pre id="plan">No plan yet</pre></details></div>
+      <a id="download" hidden>Download flow map ↗</a>
+    </section>
+    <section id="view-observer" class="view" aria-label="Observer reports"><div class="section-bar"><h2>Observer findings</h2><span class="quiet-label">OBSERVATIONS & SUPPORTING EVIDENCE</span></div><pre id="findings">No findings yet</pre></section>
+    <section id="view-results" class="view" aria-label="Task results"><div class="section-bar"><h2>Task outcomes</h2><span class="quiet-label">RESULTS FROM ASSIGNED PATHS</span></div><pre id="results">No results yet</pre></section>
+    <section id="view-events" class="view" aria-label="Event log"><div class="section-bar"><h2>Activity log</h2><span class="quiet-label">LATEST 500 EVENTS</span></div><pre id="events">Events will appear here when a run starts.</pre></section>
+    <form id="form" class="task-console">
+      <div class="console-heading"><span class="eyebrow">MISSION CONTROL</span><span class="quiet-label">What are we testing today?</span></div>
+      <div class="task-inputs"><label>Target website<input id="url" type="url" required placeholder="https://your-tunnel.example"></label><label class="task-field">Task<textarea id="prompt" required placeholder="Test search with matching and no-result queries. Stop at the results."></textarea></label></div>
+      <div class="console-bottom"><label class="worker-control"><span>Maximum simultaneous workers</span><input id="workers" type="number" min="1" max="5" value="2" required></label><details class="advanced"><summary>Run options</summary><div><label>Flow map<input id="mapFile" type="file" accept=".json,application/json"></label><label class="checkbox-label"><input id="singleAction" type="checkbox"> Test single action <small>Initial page only; skips discovery</small></label></div></details><div class="run-actions"><button id="stop" type="button" disabled>Stop</button><button id="start" type="submit">Start run <span>↗</span></button></div></div>
     </form>
-  </section>
-
-  <section id="view-observer" class="view">
-    <h1>Observer</h1>
-    <pre id="findings">No findings yet</pre>
-  </section>
-
-  <section id="view-results" class="view">
-    <h1>Results</h1>
-    <pre id="results">No results yet</pre>
-  </section>
-
-  <section id="view-events" class="view">
-    <h1>Events</h1>
-    <pre id="events"></pre>
-  </section>
-</main>
-<script src="/app.js" defer></script>
+    <footer class="page-footer"><span>HTN / BROWSER AGENT WORKSPACE</span><span>Every action tells a story.</span></footer>
+  </main>
+</body>
 </html>
