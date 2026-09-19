@@ -60,7 +60,8 @@ function render(run) {
     function tree(id) {
       if (visited.has(id)) return { stateId: id, reference: true };
       visited.add(id);
-      return { stateId: id, branches: run.map.transitions.filter(t => t.from === id).map(t => ({
+      const state = run.map.states.find(candidate => candidate.id === id);
+      return { stateId: id, task: state?.task || '', branches: run.map.transitions.filter(t => t.from === id).map(t => ({
         id: t.id, actions: t.actions, status: t.status, reason: t.reason, next: t.to ? tree(t.to) : null,
       })) };
     }
@@ -105,11 +106,7 @@ function render(run) {
       if (!note) { note = document.createElement('small'); note.className = 'live-view-note'; card.append(note); }
       note.textContent = 'Live view URL is not available yet; check the session events for details.';
     } else card.querySelector('.live-view-note')?.remove();
-    card.dataset.status = info.status;
-    card.querySelector('.session-label').textContent = `CAM ${String(run.sessions.indexOf(info) + 1).padStart(2, '0')} / ${info.agentId.toUpperCase()}`;
-    card.querySelector('.session-status').textContent = info.status === 'running' && info.liveUrl ? 'LIVE' : info.status === 'running' ? 'CONNECTING' : info.status.toUpperCase();
-    card.querySelector('.session-identity').textContent = `${info.role} · ${info.sessionId}`;
-    card.querySelector('.session-identity').title = info.sessionId;
+    card.firstChild.textContent = `${info.role} / ${info.agentId} / ${info.sessionId} / ${info.status}${info.instruction ? ` / ${info.instruction}` : ''}`;
   }
 }
 $('form').addEventListener('submit', async event => {

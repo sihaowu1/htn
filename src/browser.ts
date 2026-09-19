@@ -4,6 +4,7 @@ import Browserbase from '@browserbasehq/sdk';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { Action, Snapshot, SessionInfo } from './types.js';
 import type { Trace } from './telemetry.js';
+import { FIXTURE_LOGIN_PASSWORD, FIXTURE_PASSWORD_TOKEN } from './fixture-credentials.js';
 
 const snapshotScript = await readFile(new URL('../scripts/dom-snapshot.js', import.meta.url), 'utf8');
 
@@ -32,9 +33,12 @@ export async function perform(page: Page, action: Action, trace: Trace, signal: 
     if (await locator.count() !== 1 || !await locator.isVisible()) throw new Error(`Action selector must match one visible element: ${action.selector}`);
     const target = await locator.evaluate(el => ({ type: el.getAttribute('type'), actionable: el.matches('a[href],button,input,select,textarea,[role="button"],[role="link"]') }));
     if (!target.actionable) throw new Error('Target is not an actionable element');
-    if (target.type === 'password' || target.type === 'file') throw new Error('Unsupported input type');
+    if (target.type === 'file') throw new Error('Unsupported input type');
+    if (target.type === 'password' && (action.kind !== 'fill' || action.value !== FIXTURE_PASSWORD_TOKEN)) {
+      throw new Error('Password inputs only accept the configured fixture credential token');
+    }
     if (action.kind === 'click') await locator.click({ timeout: 10_000 });
-    if (action.kind === 'fill') await locator.fill(action.value, { timeout: 10_000 });
+    if (action.kind === 'fill') await locator.fill(action.value === FIXTURE_PASSWORD_TOKEN ? FIXTURE_LOGIN_PASSWORD : action.value, { timeout: 10_000 });
     if (action.kind === 'select') await locator.selectOption(action.value, { timeout: 10_000 });
     if (action.kind === 'press') {
       if (!['Enter', 'Tab', 'Space', 'Escape', 'ArrowDown', 'ArrowUp'].includes(action.value)) throw new Error('Unsupported key');

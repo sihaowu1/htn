@@ -19,7 +19,8 @@ export type Snapshot = z.infer<typeof snapshotSchema>;
 export const mapSchema = z.object({
   version: z.literal(1), startUrl: z.string().url(), rootId: z.string(),
   status: z.enum(['complete', 'limited', 'provided']), notes: z.array(z.string()),
-  states: z.array(z.object({ id: z.string(), snapshot: snapshotSchema, depth: z.number().int().nonnegative() })).min(1).max(500),
+  states: z.array(z.object({ id: z.string(), snapshot: snapshotSchema, depth: z.number().int().nonnegative(),
+    task: z.string().max(2000).optional() })).min(1).max(500),
   transitions: z.array(z.object({
     id: z.string(), from: z.string(), to: z.string().nullable(),
     actions: z.array(actionSchema).min(1).max(30),
@@ -51,7 +52,7 @@ export type Report = z.infer<typeof reportSchema> & {
 };
 export type Identity = { runId: string; agentId: string; role: 'crawler' | 'orchestrator' | 'worker' | 'observer' | 'system'; sessionId?: string };
 export type LogEvent = Identity & { seq: number; time: string; type: string; data: unknown };
-export type SessionInfo = { agentId: string; role: string; sessionId: string; liveUrl: string; status: string };
+export type SessionInfo = { agentId: string; role: string; sessionId: string; liveUrl: string; status: string; instruction?: string };
 export type Run = {
   id: string; prompt: string; targetUrl: string; maxWorkers: number;
   status: string; sessions: SessionInfo[]; map?: FlowMap; plan?: Plan;

@@ -8,7 +8,7 @@
     "dev": "tsx src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "tsx --test tests/core.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts",
+    "test": "tsx --test tests/core.test.ts tests/model.test.ts tests/crawler.test.ts tests/orchestrator.test.ts tests/node-execution.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts",
     "test:browser": "tsx --test tests/browser.test.ts"
   },
   "engines": {
@@ -19,6 +19,7 @@
     "@sentry/node": "10.75.0",
     "dotenv": "18.0.1",
     "express": "5.2.1",
+    "node-html-parser": "^9.0.4",
     "openai": "7.19.0",
     "playwright": "1.63.0",
     "zod": "4.6.5"
