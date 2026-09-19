@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { EventLog, redact } from '../src/telemetry.js';
 import { validateMap, validatePlan, taskTransitions, flowTree, pool, matchesState } from '../src/flow.js';
 import { verifyReport } from '../src/observer.js';
+import { validateSingleAction } from '../src/worker.js';
 import type { FlowMap, Plan, Snapshot } from '../src/types.js';
 
 const snapshot: Snapshot = { url: 'https://test.example/', title: 'Shop', text: '', dom: '', elements: [], fingerprint: 'root', unsupported: [] };
@@ -23,6 +24,16 @@ test('map round-trip and invalid references', () => {
   assert.throws(() => validateMap(map, 'https://elsewhere.example/'));
   const invalid = structuredClone(map); invalid.transitions[0].to = 'missing';
   assert.throws(() => validateMap(invalid));
+});
+test('single-action mode accepts only targets and controls observed on the initial page', () => {
+  const initial = { ...snapshot, elements: [
+    { selector: '#search', tag: 'input', type: 'search', label: 'Search', value: '', options: [] },
+    { selector: '#submit', tag: 'button', type: 'submit', label: 'Search', value: '', options: [] },
+  ] };
+  assert.deepEqual(validateSingleAction(initial, { kind: 'fill', selector: '#search', value: 'laptop' }),
+    { kind: 'fill', selector: '#search', value: 'laptop' });
+  assert.throws(() => validateSingleAction(initial, { kind: 'click', selector: '#missing', value: '' }), /not present/);
+  assert.throws(() => validateSingleAction(initial, { kind: 'fill', selector: '#submit', value: 'laptop' }), /requires an input/);
 });
 test('manual JSON fallback accepts expected text and path, but rejects a different state', async () => {
   const example = validateMap(JSON.parse(await readFile(new URL('../examples/flow-map.json', import.meta.url), 'utf8')));

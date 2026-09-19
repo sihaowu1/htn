@@ -47,6 +47,8 @@ export async function perform(page: Page, action: Action, trace: Trace, signal: 
 }
 export class BrowserSession {
   private contexts = new Set<BrowserContext>();
+  private displayed?: { context: BrowserContext; liveUrl: string };
+  private deferredDisposals = new Set<BrowserContext>();
   private pending = new Set<Promise<unknown>>();
   private closePromise?: Promise<void>;
   constructor(private sdk: Browserbase, private browser: Browser, public info: SessionInfo, private trace: Trace,
@@ -116,8 +118,17 @@ export class BrowserSession {
           const debug = await this.sdk.sessions.debug(this.info.sessionId);
           pageLiveUrl = pageLiveViewUrl(debug.pages, page.url());
           if (pageLiveUrl) {
+            const previous = this.displayed;
+            this.displayed = { context, liveUrl: pageLiveUrl };
             this.info.liveUrl = pageLiveUrl;
             this.publish(this.info);
+            // Discovery uses fresh contexts to preserve replay isolation. Keep
+            // the old displayed context alive until its replacement is ready,
+            // then retire it without exposing the handoff in the UI.
+            if (previous && previous.context !== context && this.deferredDisposals.delete(previous.context)) {
+              await previous.context.close().catch(() => undefined);
+              this.contexts.delete(previous.context);
+            }
             break;
           } else if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500));
         } catch (error) {
@@ -129,12 +140,9 @@ export class BrowserSession {
         await this.trace.event('session.live_view.failed', { error: String(liveViewError) });
       }
       return { page, dispose: async () => {
-        // A page-specific Browserbase debugger URL becomes invalid as soon as
-        // its context closes. Remove the iframe first so it never displays a
-        // stale "debugging connection was closed" page between crawler leases.
-        if (pageLiveUrl && this.info.liveUrl === pageLiveUrl) {
-          this.info.liveUrl = '';
-          this.publish(this.info);
+        if (this.displayed?.context === context) {
+          this.deferredDisposals.add(context);
+          return;
         }
         await context.close(); this.contexts.delete(context);
       } };
@@ -145,6 +153,9 @@ export class BrowserSession {
       this.info.liveUrl = '';
       this.publish(this.info);
       await Promise.allSettled([...this.contexts].map(c => c.close()));
+      this.contexts.clear();
+      this.deferredDisposals.clear();
+      this.displayed = undefined;
       try {
         await this.sdk.sessions.update(this.info.sessionId, { projectId: process.env.BROWSERBASE_PROJECT_ID!, status: 'REQUEST_RELEASE' });
         this.info.status = 'closed';

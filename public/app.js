@@ -46,7 +46,13 @@ function render(run) {
       let frame = card.querySelector('iframe');
       if (!frame) { frame = document.createElement('iframe'); frame.title = info.agentId; card.append(frame); }
       const url = new URL(info.liveUrl); url.searchParams.set('readOnly', 'true');
-      if (frame.src !== url.href) frame.src = url.href;
+      // Browserbase may redirect/canonicalize the iframe URL. Comparing
+      // frame.src to the original URL then reloads DevTools on every run
+      // update, closing its WebSocket even though the session is healthy.
+      if (frame.dataset.liveUrl !== info.liveUrl) {
+        frame.dataset.liveUrl = info.liveUrl;
+        frame.src = url.href;
+      }
     } else {
       card.querySelector('iframe')?.remove();
     }

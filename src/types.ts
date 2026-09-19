@@ -39,6 +39,7 @@ export type Task = Plan['paths'][number];
 export const decisionSchema = z.object({
   decision: z.enum(['execute', 'success', 'blocked']), reason: z.string(), evidence: z.string(),
 });
+export const firstPageActionsSchema = z.object({ actions: z.array(actionSchema).min(1).max(5), reason: z.string() });
 export const reportSchema = z.object({
   summary: z.string(), findings: z.array(z.object({
     severity: z.enum(['info', 'warning', 'error']),

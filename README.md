@@ -34,7 +34,7 @@
    npm run dev
    ```
 
-5. Paste the target's HTTPS tunnel URL, enter a task, choose maximum simultaneous workers, and click **Start**. Watch discovery, worker browsers, events, and observer reports. Use **Stop** to cancel. The temporary `TEST SINGLE ACTION (REMOVE BEFORE DEMO)` switch runs the normal crawl and planning pipeline but truncates each selected worker path to its first tree transition. Global events are saved to `logs/events.jsonl`; use the event's agent/session IDs to match Browserbase and Sentry.
+5. Paste the target's HTTPS tunnel URL, enter a task, choose maximum simultaneous workers, and click **Start**. Watch discovery, worker browsers, events, and observer reports. Use **Stop** to cancel. The temporary `TEST SINGLE ACTION` switch skips discovery and normal planning: one worker inspects the initial page, executes one simple requested task using a short sequence of only controls observed there (for example, fill search and submit), and stops. It does not require a flow map. Global events are saved to `logs/events.jsonl`; use the event's agent/session IDs to match Browserbase and Sentry.
 
 6. If discovery is incomplete or does not work, download a flow map, correct it, and select it with the JSON input on the next run. Use `examples/flow-map.json` as a format example. Its `startUrl` must exactly match the target URL. Increase `CRAWL_MAX_STATES`, `CRAWL_MAX_DEPTH`, or `CRAWL_TIMEOUT_MS` in `.env` if needed, then restart. Use a repeatable demo site: discovery may submit forms and fresh sessions do not reset backend data.
 

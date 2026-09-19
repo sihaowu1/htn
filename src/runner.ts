@@ -7,7 +7,7 @@ import { OpenAIModel } from './model.js';
 import { Observer } from './observer.js';
 import { EventLog, Trace } from './telemetry.js';
 import { planSchema, type FlowMap, type Run, type Identity } from './types.js';
-import { executeTask } from './worker.js';
+import { executeSingleAction, executeTask } from './worker.js';
 
 export class Runner {
   runs = new Map<string, Run>();
@@ -53,6 +53,22 @@ export class Runner {
     await system.event('run.started', { prompt: run.prompt, targetUrl: run.targetUrl, maxWorkers: run.maxWorkers });
     observer.start();
     try {
+      if (testSingleAction) {
+        run.status = 'running';
+        run.plan = { summary: 'Execute one simple task using only controls from the initial page, without discovery', paths: [], skipped: [] };
+        this.publish(run);
+        await system.event('test.single_action.enabled', { discovery: false });
+        const t = trace('worker', 'worker-1');
+        const workerSignal = AbortSignal.any([signal, AbortSignal.timeout(config.workerTimeout)]);
+        const session = await open(t, workerSignal);
+        try {
+          run.results.push(await t.span('worker', () => executeSingleAction(run.prompt, run.targetUrl,
+            url => session.page(url), model, t, workerSignal)));
+        } finally { await session.close(); this.publish(run); }
+        run.status = 'succeeded';
+        await system.event('run.finished', { status: run.status, results: run.results });
+        return;
+      }
       if (supplied) { run.map = validateMap(supplied, run.targetUrl); await system.event('map.imported', { status: run.map.status }); }
       else {
         run.status = 'discovering'; this.publish(run);
@@ -70,14 +86,6 @@ export class Runner {
       run.plan = validatePlan(run.map!, await model.call(trace('orchestrator'), 'assign_paths', planSchema,
         'You are the orchestrator. Analyze the supplied discovered flow tree and user task; you cannot browse. Assign distinct contiguous root-to-destination paths using only observed transitions. Stop at the earliest state satisfying the task. Explicitly skip unrelated branches, even if discovery explored them. Do not append checkout to a search task. Shared prefixes are allowed; duplicate paths and loops are not. Include exact stopping conditions grounded in observable page evidence. Return no paths and explain if no discovered path can satisfy the task. Paths with zero transitions may inspect the root.',
         { task: run.prompt, map: planningMap, tree: flowTree(run.map!), maxConcurrentWorkers: run.maxWorkers }, signal));
-      if (testSingleAction) {
-        run.plan = { ...run.plan, paths: run.plan.paths.map(path => ({
-          ...path, transitionIds: path.transitionIds.slice(0, 1),
-          instructions: `${path.instructions} TEST SINGLE ACTION is enabled: execute only the first assigned tree transition.`,
-          stopCondition: 'Stop after the first assigned tree transition.',
-        })) };
-        await system.event('test.single_action.enabled', { paths: run.plan.paths.length });
-      }
       await trace('orchestrator').event('plan.created', run.plan);
       run.status = 'running'; this.publish(run);
       await pool(run.plan.paths, run.maxWorkers, signal, async (task, index) => {
