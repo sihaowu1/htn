@@ -1,6 +1,6 @@
 import { chromium, type Page } from 'playwright';
 import { z } from 'zod';
-import { inspect, perform, settle } from '../browser.js';
+import { fingerprint, inspect, perform, settle } from '../browser.js';
 import { config } from '../config.js';
 import { FIXTURE_LOGIN_USERNAME, FIXTURE_PASSWORD_TOKEN } from '../fixture-credentials.js';
 import type { Model } from '../model.js';
@@ -97,7 +97,11 @@ function workerUrl(localUrl: string, localOrigin: string, workerStartUrl: string
 }
 
 function mappedSnapshot(snapshot: Snapshot, localOrigin: string, workerStartUrl: string): Snapshot {
-  return { ...snapshot, url: workerUrl(snapshot.url, localOrigin, workerStartUrl) };
+  const workerOrigin = new URL(workerStartUrl).origin;
+  const rewritten = JSON.parse(JSON.stringify(snapshot).split(localOrigin).join(workerOrigin)
+    .split(encodeURIComponent(localOrigin)).join(encodeURIComponent(workerOrigin))) as Snapshot;
+  const mapped = { ...rewritten, url: workerUrl(snapshot.url, localOrigin, workerStartUrl) };
+  return { ...mapped, fingerprint: fingerprint(mapped) };
 }
 
 export async function crawl(startUrl: string, goal: string, model: Model, trace: Trace, signal: AbortSignal,
@@ -122,6 +126,7 @@ export async function crawl(startUrl: string, goal: string, model: Model, trace:
     map.states.push({ id: map.rootId, snapshot: mappedSnapshot(root, local.origin, startUrl), depth: 0, task: `Start: ${goal}` });
     const replayPaths = new Map<string, Action[][]>([[map.rootId, []]]);
     const fingerprints = new Map<string, string>([[root.fingerprint, map.rootId]]);
+    const localFingerprints = new Map<string, string>([[map.rootId, root.fingerprint]]);
     let transitionNumber = 0;
 
     for (let cursor = 0; cursor < map.states.length; cursor++) {
@@ -177,12 +182,12 @@ export async function crawl(startUrl: string, goal: string, model: Model, trace:
           lease = await openLocal();
           for (const step of replayPaths.get(state.id)!) for (const action of step) await perform(lease.page, action, trace, signal);
           const before = await inspect(lease.page);
-          if (before.fingerprint !== state.snapshot.fingerprint) throw new Error('Local replay produced a different state');
+          if (before.fingerprint !== localFingerprints.get(state.id)) throw new Error('Local replay produced a different state');
           for (const action of assignment.actions) await perform(lease.page, action, trace, signal);
           const observed = await inspect(lease.page);
           let destination = fingerprints.get(observed.fingerprint);
           if (!destination) {
-            destination = `s${map.states.length}`; fingerprints.set(observed.fingerprint, destination);
+            destination = `s${map.states.length}`; fingerprints.set(observed.fingerprint, destination); localFingerprints.set(destination, observed.fingerprint);
             map.states.push({ id: destination, snapshot: mappedSnapshot(observed, local.origin, startUrl), depth: state.depth + 1, task: assignment.task });
             replayPaths.set(destination, [...replayPaths.get(state.id)!, assignment.actions]);
           }

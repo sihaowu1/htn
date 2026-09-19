@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { crawl } from '../src/crawler.js';
+import { fingerprint } from '../src/browser.js';
 import { planRelevantTree, validateMap } from '../src/flow.js';
 import { EventLog, Trace } from '../src/telemetry.js';
 import type { Model } from '../src/model.js';
@@ -30,6 +31,9 @@ test('rendered local crawler maps URLs to the worker origin and discovers goal-r
     assert.ok(map.states.length > 1);
     assert.ok(map.states.every(state => state.snapshot.url.startsWith('https://worker.example/store/')));
     assert.ok(map.states.every(state => !state.snapshot.url.includes('127.0.0.1')));
+    assert.ok(map.states.every(state => !state.snapshot.dom.includes('127.0.0.1') && !state.snapshot.dom.includes('127.0.0.1'.replace(/\./g, '%2E'))),
+      'local origin embedded in the DOM must be rewritten so worker fingerprints can match');
+    assert.ok(map.states.every(state => state.snapshot.fingerprint === fingerprint(state.snapshot)));
     assert.ok(map.states.some(state => state.task === 'Search television'));
     assert.ok(map.states.some(state => state.task?.includes('to 3 and click Add to Cart')));
     const satisfied = map.states.find(state => /Added to cart/i.test(state.snapshot.text) && /Cart\s*3\b/i.test(state.snapshot.text));
