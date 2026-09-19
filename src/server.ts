@@ -26,7 +26,7 @@ const runner = new Runner(log, (run: Run) => send(run.id, 'run', run));
 log.on('event', (event: LogEvent) => send(event.runId, 'log', event));
 app.get('/api/config', (_req, res) => res.json({ maxWorkers: config.maxWorkers, missingCredentials: missingCredentials() }));
 const requestSchema = z.object({ prompt: z.string().trim().min(1).max(8000), targetUrl: z.string().url(),
-  maxWorkers: z.number().int().min(1).max(config.maxWorkers), flowMap: z.unknown().optional() });
+  maxWorkers: z.number().int().min(1).max(config.maxWorkers), flowMap: z.unknown().optional(), testSingleAction: z.boolean().default(false) });
 app.post('/api/runs', (req, res) => {
   try {
     const input = requestSchema.parse(req.body);
@@ -36,7 +36,7 @@ app.post('/api/runs', (req, res) => {
     const map = input.flowMap === undefined ? undefined : validateMap(input.flowMap, url.href);
     const missing = missingCredentials();
     if (missing.length) { res.status(503).json({ error: `Set these environment variables: ${missing.join(', ')}` }); return; }
-    res.status(202).json(runner.start(input.prompt, url.href, input.maxWorkers, map));
+    res.status(202).json(runner.start(input.prompt, url.href, input.maxWorkers, map, input.testSingleAction));
   } catch (error) { res.status(String(error).includes('already active') ? 409 : 400).json({ error: String(error) }); }
 });
 app.get('/api/runs/:id', (req, res) => {

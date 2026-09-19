@@ -49,7 +49,7 @@ $('form').addEventListener('submit', async event => {
   event.preventDefault(); $('error').textContent = ''; $('start').disabled = true;
   try {
     const file = $('mapFile').files[0];
-    const data = { targetUrl: $('url').value, prompt: $('prompt').value, maxWorkers: Number($('workers').value),
+    const data = { targetUrl: $('url').value, prompt: $('prompt').value, maxWorkers: Number($('workers').value), testSingleAction: $('singleAction').checked,
       ...(file ? { flowMap: JSON.parse(await file.text()) } : {}) };
     const run = await request('/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
     stream?.close(); seen.clear(); eventRows.clear(); cards.clear(); $('sessions').replaceChildren(); $('events').textContent = '';

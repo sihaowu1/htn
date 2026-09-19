@@ -17,6 +17,7 @@ iframe { width: 100%; height: 380px; border: 1px solid #aaa; } #error { color: #
 <label>Task <textarea id="prompt" required placeholder="Test search with matching and no-result queries. Stop at the results."></textarea></label>
 <label>Maximum simultaneous workers <input id="workers" type="number" min="1" max="5" value="2" required></label>
 <label>Optional flow-map JSON (bypass discovery) <input id="mapFile" type="file" accept=".json,application/json"></label>
+<label><input id="singleAction" type="checkbox"> TEST SINGLE ACTION (REMOVE BEFORE DEMO)</label>
 <button id="start">Start</button> <button id="stop" type="button" disabled>Stop</button>
 </form>
 <p id="error" role="alert"></p><p id="status">Idle</p>

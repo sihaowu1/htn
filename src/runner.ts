@@ -13,12 +13,12 @@ export class Runner {
   runs = new Map<string, Run>();
   private active?: { run: Run; controller: AbortController; done: Promise<void> };
   constructor(public log: EventLog, private publish: (run: Run) => void) {}
-  start(prompt: string, targetUrl: string, maxWorkers: number, supplied?: FlowMap) {
+  start(prompt: string, targetUrl: string, maxWorkers: number, supplied?: FlowMap, testSingleAction = false) {
     if (this.active) throw new Error('A run is already active');
     const run: Run = { id: randomUUID(), prompt, targetUrl, maxWorkers, status: 'starting', sessions: [], findings: [], results: [] };
     const controller = new AbortController();
     this.runs.set(run.id, run);
-    const done = Promise.resolve().then(() => this.execute(run, controller, supplied)).catch(async error => {
+    const done = Promise.resolve().then(() => this.execute(run, controller, supplied, testSingleAction)).catch(async error => {
       run.status = 'failed';
       await this.log.write({ runId: run.id, agentId: 'system', role: 'system' }, 'run.failed', { error: String(error) }).catch(() => undefined);
     }).finally(() => { this.active = undefined; this.publish(run); });
@@ -31,7 +31,7 @@ export class Runner {
     this.active.run.status = 'cancelling'; this.publish(this.active.run); return true;
   }
   async shutdown() { if (this.active) { this.active.controller.abort(new Error('Server shutdown')); await this.active.done; } }
-  private async execute(run: Run, controller: AbortController, supplied?: FlowMap) {
+  private async execute(run: Run, controller: AbortController, supplied?: FlowMap, testSingleAction = false) {
     const signal = controller.signal;
     const trace = (role: Identity['role'], agentId: string = role) => new Trace(this.log, { runId: run.id, agentId, role });
     const system = trace('system');
@@ -70,6 +70,14 @@ export class Runner {
       run.plan = validatePlan(run.map!, await model.call(trace('orchestrator'), 'assign_paths', planSchema,
         'You are the orchestrator. Analyze the supplied discovered flow tree and user task; you cannot browse. Assign distinct contiguous root-to-destination paths using only observed transitions. Stop at the earliest state satisfying the task. Explicitly skip unrelated branches, even if discovery explored them. Do not append checkout to a search task. Shared prefixes are allowed; duplicate paths and loops are not. Include exact stopping conditions grounded in observable page evidence. Return no paths and explain if no discovered path can satisfy the task. Paths with zero transitions may inspect the root.',
         { task: run.prompt, map: planningMap, tree: flowTree(run.map!), maxConcurrentWorkers: run.maxWorkers }, signal));
+      if (testSingleAction) {
+        run.plan = { ...run.plan, paths: run.plan.paths.map(path => ({
+          ...path, transitionIds: path.transitionIds.slice(0, 1),
+          instructions: `${path.instructions} TEST SINGLE ACTION is enabled: execute only the first assigned tree transition.`,
+          stopCondition: 'Stop after the first assigned tree transition.',
+        })) };
+        await system.event('test.single_action.enabled', { paths: run.plan.paths.length });
+      }
       await trace('orchestrator').event('plan.created', run.plan);
       run.status = 'running'; this.publish(run);
       await pool(run.plan.paths, run.maxWorkers, signal, async (task, index) => {
