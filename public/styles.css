@@ -24,3 +24,33 @@ main{min-width:0;flex:1;padding:0 38px;max-width:1800px;margin:auto;width:100%}.
 @media(max-width:1100px){.sidebar{width:170px}main{padding:0 24px}.console-bottom{gap:12px;flex-wrap:wrap}.worker-control>span{max-width:130px}.desk-label{display:none}.quiet-label{letter-spacing:.4px}.session iframe{height:280px}}
 @media(max-width:760px){body{display:block}.sidebar{position:static;width:auto;height:auto;padding:14px 18px;border-right:0;border-bottom:1px solid var(--border);flex-direction:row;align-items:center;gap:20px}.brand{font-size:26px;padding:0}.brand-mark{width:27px;height:27px;font-size:23px}.sidebar-caption,.sidebar-bottom,.nav-icon,.nav-arrow{display:none}nav{display:flex;flex:1;justify-content:flex-end;gap:2px}nav button{padding:10px 8px;font-size:11px;width:auto}main{padding:0 18px}.topbar{height:52px}.room-label{display:none}.page-heading{margin:24px 0}.monitor-grid{grid-template-columns:1fr}.empty-monitor:nth-child(2){display:none}.section-bar>.quiet-label{display:none}.discovery-panels{grid-template-columns:1fr;gap:8px}.task-inputs{flex-direction:column}.task-inputs label{width:100%}.console-heading>.quiet-label{display:none}.watch-desk{gap:15px}.agent-caption>span{max-width:190px;line-height:1.5}.agent-caption strong{max-width:190px;line-height:1.4}.console-bottom{gap:16px}.run-actions{width:100%;justify-content:flex-end}.task-console{padding:16px}.page-footer{font-size:7px;gap:15px}.session iframe{height:320px}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+.sidebar .brand{font-size:20px;letter-spacing:-.7px;gap:7px;padding:0 4px}.sidebar .brand-mark{font-size:23px;width:29px;height:29px;letter-spacing:-2px;flex:none}.sidebar .brand-period{margin-left:-7px}
+.tower-logo{font-size:31px;color:#b6cbea;line-height:1;flex:none}
+#view-browsers > .section-bar h2{font-size:24px;font-weight:500;letter-spacing:-.5px}
+/* The lookout sits above the feeds; its gaze follows the screens below. */
+#view-browsers .watch-desk{min-height:132px;margin:0 0 18px}
+#view-browsers .desk-line{top:auto;bottom:14px}
+#view-browsers .desk-label{bottom:22px}
+#view-browsers .agent-head{transform-origin:50% 80%;animation:watch-head 10s ease-in-out infinite}
+#view-browsers .agent-face{animation:watch-gaze 10s ease-in-out infinite}
+#view-browsers .arm.right{animation:watch-wave 10s ease-in-out infinite}
+#view-browsers .discovery-panels{margin-top:24px}
+@keyframes watch-head{
+  0%,12%,86%,100%{transform:translateY(0) rotate(0)}
+  24%,35%{transform:translate(-3px,5px) rotate(9deg)}
+  49%,61%{transform:translate(3px,5px) rotate(-9deg)}
+  72%{transform:translate(0,5px) rotate(0)}
+}
+@keyframes watch-gaze{
+  0%,12%,86%,100%{transform:translate(0,0)}
+  24%,35%{transform:translate(-3px,4px)}
+  49%,61%{transform:translate(3px,4px)}
+  72%{transform:translate(0,4px)}
+}
+@keyframes watch-wave{
+  0%,76%,100%{transform:rotate(-16deg)}
+  84%,92%{transform:rotate(-65deg)}
+  88%,96%{transform:rotate(-35deg)}
+}
+.task-console{margin:0 0 28px}.advanced>div{top:30px;bottom:auto}.session-instruction{font-size:11px;line-height:1.6;color:#bbc6d5;padding:8px 11px;margin:0;border-top:1px solid var(--border)}
+@media(max-width:760px){.sidebar{flex-wrap:wrap}.sidebar .brand{font-size:19px}nav{flex-basis:100%;justify-content:flex-start}.advanced>div{left:auto;right:0;width:min(290px,80vw)}}

@@ -8,7 +8,7 @@ $('nav').addEventListener('click', event => {
   }
   for (const view of document.querySelectorAll('.view')) view.classList.toggle('active', view.id === `view-${button.dataset.view}`);
   const headings = {
-    browsers: ['Observation room', 'A front-row seat to every path, click, and discovery.'],
+    browsers: ['Control Room', 'A front-row seat to every path, click, and discovery.'],
     observer: ['A second pair of eyes', 'Observed facts, possible causes, and the evidence behind them.'],
     results: ['Every path has an outcome', 'See where each assigned task landed.'],
     events: ['The whole story', 'Follow the observations and actions behind a run.'],
@@ -106,7 +106,16 @@ function render(run) {
       if (!note) { note = document.createElement('small'); note.className = 'live-view-note'; card.append(note); }
       note.textContent = 'Live view URL is not available yet; check the session events for details.';
     } else card.querySelector('.live-view-note')?.remove();
-    card.firstChild.textContent = `${info.role} / ${info.agentId} / ${info.sessionId} / ${info.status}${info.instruction ? ` / ${info.instruction}` : ''}`;
+    card.dataset.status = info.status;
+    card.querySelector('.session-label').textContent = `CAM ${String(run.sessions.indexOf(info) + 1).padStart(2, '0')} / ${info.agentId.toUpperCase()}`;
+    card.querySelector('.session-status').textContent = info.status === 'running' && info.liveUrl ? 'LIVE' : info.status.toUpperCase();
+    card.querySelector('.session-identity').textContent = `${info.role} · ${info.sessionId}`;
+    card.querySelector('.session-identity').title = info.sessionId;
+    let instruction = card.querySelector('.session-instruction');
+    if (info.instruction) {
+      if (!instruction) { instruction = document.createElement('p'); instruction.className = 'session-instruction'; card.append(instruction); }
+      instruction.textContent = info.instruction;
+    } else instruction?.remove();
   }
 }
 $('form').addEventListener('submit', async event => {

@@ -21,7 +21,15 @@ test('HTTP server serves bare frontend and validates runs without leaking creden
       await delay(100);
     }
     assert.ok(ready, output);
-    assert.match(await (await fetch(origin)).text(), /Maximum simultaneous workers/);
+    const landing = await (await fetch(origin)).text();
+    assert.match(landing, /Watchtower/);
+    assert.match(landing, /Get started/);
+    assert.match(landing, /href="\/dashboard.html"/);
+    const dashboard = await (await fetch(origin + '/dashboard.html')).text();
+    assert.match(dashboard, /Maximum simultaneous workers/);
+    assert.match(dashboard, /Control Room/);
+    assert.match(dashboard, /TASK ASSIGNMENT/);
+    assert.ok(dashboard.indexOf('id="form"') < dashboard.indexOf('id="view-browsers"'));
     const configuration = await (await fetch(origin + '/api/config')).json();
     assert.deepEqual(configuration.missingCredentials.sort(), ['BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'OPENAI_API_KEY', 'SENTRY_DSN']);
     const post = (body: unknown) => fetch(origin + '/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
