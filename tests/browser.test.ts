@@ -5,13 +5,22 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { inspect, perform } from '../src/browser.js';
+import { inspect, pageLiveViewUrl, perform } from '../src/browser.js';
 import { crawl } from '../src/crawler.js';
 import { executeTask } from '../src/worker.js';
 import { EventLog, Trace } from '../src/telemetry.js';
 import { validateMap } from '../src/flow.js';
 import type { Model } from '../src/model.js';
 import type { FlowMap } from '../src/types.js';
+
+test('live view selects the navigated page instead of the default blank tab', () => {
+  const pages = [
+    { url: 'about:blank', debuggerFullscreenUrl: 'https://debug.example/blank' },
+    { url: 'https://target.example/', debuggerFullscreenUrl: 'https://debug.example/target' },
+  ];
+  assert.equal(pageLiveViewUrl(pages, 'https://target.example/'), 'https://debug.example/target');
+  assert.equal(pageLiveViewUrl(pages, 'https://missing.example/'), '');
+});
 
 test('real Chromium: discovery, replay, search-only stopping, divergence, limits and cancellation', { skip: process.env.RUN_BROWSER_TESTS !== '1', timeout: 180_000 }, async () => {
   const html = await readFile(new URL('fixtures/site.html', import.meta.url));

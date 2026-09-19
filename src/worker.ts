@@ -1,10 +1,45 @@
 import { inspect, perform } from './browser.js';
 import { matchesState, taskTransitions } from './flow.js';
-import { decisionSchema, type FlowMap, type Task } from './types.js';
+import { decisionSchema, firstPageActionsSchema, type Action, type FlowMap, type Snapshot, type Task } from './types.js';
 import type { PageFactory } from './crawler.js';
 import type { Model } from './model.js';
 import type { Trace } from './telemetry.js';
 import { config } from './config.js';
+import type { Page } from 'playwright';
+
+export function validateSingleAction(snapshot: Snapshot, action: Action) {
+  const element = snapshot.elements.find(candidate => candidate.selector === action.selector);
+  if (!element) throw new Error('Model selected an action target that is not present in the current page observation');
+  if (action.kind === 'fill' && !['input', 'textarea'].includes(element.tag)) throw new Error('Fill action requires an input or textarea');
+  if (action.kind === 'select' && element.tag !== 'select') throw new Error('Select action requires a select element');
+  return action;
+}
+
+/** Complete one simple task on the current page with one fully awaited model step. */
+export async function completeSimpleActionOnCurrentPage(task: string, page: Page,
+  model: Model, trace: Trace, signal: AbortSignal) {
+  signal.throwIfAborted();
+  const snapshot = await inspect(page);
+  await trace.event('worker.observation', { snapshot, stateId: 'current' });
+  const selection = await model.call(trace, 'choose_current_page_actions', firstPageActionsSchema,
+    'You are a browser testing worker completing one simple task on the current page. Return the shortest sequence of at most five browser operations needed to perform it, using only visible actionable elements in the supplied current-page observation and copying every selector verbatim. A single user-level task may require multiple operations, such as filling a search field and clicking its submit button. Use click for links/buttons, fill for text fields, select for select elements, or press only for a supported key. Do not explore, add unrelated operations, or continue beyond the requested task.',
+    { task, snapshot }, signal);
+  const actions = selection.actions.map(action => validateSingleAction(snapshot, action));
+  for (const action of actions) await perform(page, action, trace, signal);
+  await trace.event('worker.simple_action.completed', { task, reason: selection.reason, actions });
+  return { reason: selection.reason, actions };
+}
+
+export async function executeSingleAction(prompt: string, startUrl: string, openPage: PageFactory,
+  model: Model, trace: Trace, signal: AbortSignal) {
+  const lease = await openPage(startUrl);
+  try {
+    const completed = await completeSimpleActionOnCurrentPage(prompt, lease.page, model, trace, signal);
+    const result = { name: 'Single action', status: 'succeeded', reason: completed.reason };
+    await trace.event('worker.success', { ...result, actions: completed.actions });
+    return result;
+  } finally { await lease.dispose().catch(() => undefined); }
+}
 
 export async function executeTask(task: Task, map: FlowMap, prompt: string, openPage: PageFactory,
   model: Model, trace: Trace, signal: AbortSignal, maxActions = config.maxActions) {
