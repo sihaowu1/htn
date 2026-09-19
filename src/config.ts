@@ -12,6 +12,7 @@ export const config = {
   maxStates: number('CRAWL_MAX_STATES', 100), maxDepth: number('CRAWL_MAX_DEPTH', 8),
   crawlTimeout: number('CRAWL_TIMEOUT_MS', 600_000),
   maxActions: number('WORKER_MAX_ACTIONS', 30), workerTimeout: number('WORKER_TIMEOUT_MS', 300_000),
+  workerLinger: number('WORKER_LINGER_MS', 30_000),
   maxWorkers: number('MAX_WORKERS', 5), maxPaths: number('MAX_PATHS', 3),
 };
 export function missingCredentials() {

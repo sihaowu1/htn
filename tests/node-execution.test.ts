@@ -47,3 +47,25 @@ test('selected-path worker receives and completes node instructions one at a tim
     assert.deepEqual(events.filter(event => event.type === 'worker.node.completed').map(event => (event.data as any).instruction), instructions);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('a completed path whose final state is not checkout is incomplete for a checkout goal', async () => {
+  const map: FlowMap = { version: 1, startUrl: 'https://test.example/', rootId: 'root', status: 'complete', notes: [],
+    states: [
+      { id: 'root', depth: 0, task: 'Start', snapshot: snapshot('root') },
+      { id: 'product', depth: 1, task: 'Click Add to Cart', snapshot: snapshot('product') },
+    ], transitions: [
+      { id: 'add', from: 'root', to: 'product', status: 'observed', reason: '', actions: [{ kind: 'click', selector: '#add', value: '' }] },
+    ] };
+  const dir = await mkdtemp(join(tmpdir(), 'node-worker-'));
+  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
+  const trace = new Trace(log, { runId: 'run', agentId: 'worker-1', role: 'worker', sessionId: 'session' });
+  let state = 'root';
+  const model: Model = { call: async (_trace, _name, schema) => schema.parse({ decision: 'execute', reason: 'ok' }) };
+  try {
+    const result = await executeNodeSequence({ name: 'Cart path', transitionIds: ['add'], instructions: 'Add to cart', stopCondition: 'Added' },
+      map, 'Add a TV and proceed to checkout', async () => ({ page: {} as any, dispose: async () => {} }), model, trace,
+      new AbortController().signal, () => {}, 10, { inspect: async () => snapshot(state), perform: async () => { state = 'product'; } });
+    assert.equal(result.status, 'incomplete');
+    assert.ok((await log.read('run')).some(event => event.type === 'worker.incomplete'));
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

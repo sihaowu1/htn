@@ -25,6 +25,10 @@ export function matchesState(expected: Snapshot, actual: Snapshot) {
     && !!expected.text.trim() && actual.text.includes(expected.text.trim())
     && expected.elements.every(e => actual.elements.some(a => a.selector === e.selector && (!e.label || a.label === e.label)));
 }
+export function reachesGoal(goal: string, snapshot: Snapshot) {
+  if (!/\b(?:check\s?out|payment|pay|purchase|order)\b/i.test(goal)) return true;
+  return /checkout|payment|confirmation/i.test(new URL(snapshot.url).pathname);
+}
 export function taskTransitions(map: FlowMap, task: Task): Transition[] {
   let at = map.rootId;
   const seen = new Set([at]);
