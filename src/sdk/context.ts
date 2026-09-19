@@ -5,16 +5,21 @@ export class RunContext {
   readonly run_id: string;
   readonly goal: string;
   readonly created_at: string;
-  constructor(goal: string, runId: string = randomUUID()) {
+  readonly workflow_type: string;
+  readonly tags: Record<string, string>;
+  constructor(goal: string, runId: string = randomUUID(), workflowType = 'browser_qa', tags: Record<string, string> = {}) {
     this.run_id = runId;
     this.goal = goal;
     this.created_at = new Date().toISOString();
+    this.workflow_type = workflowType;
+    this.tags = tags;
   }
   registerAgentExecution(input: RegisterAgentInput): AgentExecutionContext {
     return new AgentExecutionContext(this.run_id, input.agent_id, input.assigned_task);
   }
   toRun(): Run {
-    return { run_id: this.run_id, goal: this.goal, created_at: this.created_at };
+    return { run_id: this.run_id, goal: this.goal, created_at: this.created_at,
+      workflow_type: this.workflow_type, status: 'starting', tags: this.tags };
   }
 }
 

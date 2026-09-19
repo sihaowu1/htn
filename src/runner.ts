@@ -7,7 +7,7 @@ import { pool, validateMap } from './flow.js';
 import { OpenAIModel } from './model.js';
 import { orchestratePaths } from './orchestrator/index.js';
 import { executeNodeSequence } from './execution/node-sequence.js';
-import { Sentry } from './telemetry.js';
+import { withSpan } from './telemetry.js';
 import type { AgentExecutionContext, Harness } from './sdk/index.js';
 import { type FlowMap, type Run } from './types.js';
 import { executeSingleAction } from './worker.js';
@@ -21,7 +21,8 @@ export class Runner {
     const run: Run = { id: randomUUID(), prompt, targetUrl, maxWorkers, status: 'starting', sessions: [], findings: [], results: [] };
     const controller = new AbortController();
     this.runs.set(run.id, run);
-    const done = Promise.resolve().then(() => this.execute(run, controller, supplied, testSingleAction)).catch(async error => {
+    const done = Promise.resolve().then(() => withSpan({ name: 'workflow.run', op: 'agent.run',
+      attributes: { run_id: run.id } }, () => this.execute(run, controller, supplied, testSingleAction))).catch(async error => {
       run.status = 'failed';
       await this.harness.start_run({ goal: run.prompt, run_id: run.id }).then(runCtx =>
         this.harness.register_agent_execution(runCtx, { agent_id: 'system' })).then(system =>
@@ -39,7 +40,8 @@ export class Runner {
   private async execute(run: Run, controller: AbortController, supplied?: FlowMap, testSingleAction = false) {
     const signal = controller.signal;
     const { harness } = this;
-    const runCtx = await harness.start_run({ goal: run.prompt, run_id: run.id });
+    const runCtx = await harness.start_run({ goal: run.prompt, run_id: run.id,
+      workflow_type: 'browser_qa', tags: { target_host: new URL(run.targetUrl).hostname } });
     const system = await harness.register_agent_execution(runCtx, { agent_id: 'system' });
     const model = new OpenAIModel();
     const sessions = new Set<BrowserSession>();
@@ -68,7 +70,7 @@ export class Runner {
         const workerSignal = AbortSignal.any([signal, AbortSignal.timeout(config.workerTimeout)]);
         const session = await open(worker, workerSignal);
         try {
-          run.results.push(await Sentry.startSpan({ name: 'worker', op: 'agent',
+          run.results.push(await withSpan({ name: 'worker', op: 'agent',
             attributes: { run_id: run.id, agent_execution_id: worker.agent_execution_id } }, () =>
             harness.wrapToolCall(worker, () => executeSingleAction(run.prompt, run.targetUrl,
               url => session.page(url), model, harness, worker, workerSignal), { name: 'worker' })));
@@ -79,7 +81,7 @@ export class Runner {
       }
       const resolveFlowMap = async () => {
         run.status = 'discovering'; this.publish(run);
-        await emit(system, 'pipeline.phase.started', { phase: 'sitemap_or_crawler' });
+        await emit(system, 'workflow.stage.started', { stage: 'discovery' });
         if (supplied) {
           run.map = validateMap(supplied, run.targetUrl);
           await emit(system, 'map.imported', { status: run.map.status });
@@ -87,7 +89,7 @@ export class Runner {
           const crawler = await harness.register_agent_execution(runCtx, { agent_id: 'crawler' });
           const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
           try {
-            run.map = await Sentry.startSpan({ name: 'discovery', op: 'agent',
+            run.map = await withSpan({ name: 'discovery', op: 'agent',
               attributes: { run_id: run.id, agent_execution_id: crawler.agent_execution_id } }, () =>
               harness.wrapToolCall(crawler, () => crawl(run.targetUrl, run.prompt, model, harness, crawler, discoverySignal,
                 map => { run.map = map; this.publish(run); }), { name: 'discovery' }));
@@ -101,21 +103,31 @@ export class Runner {
           await writeFile('logs/bestbuy_tree.json', JSON.stringify(run.map, null, 2) + '\n', 'utf8');
           await emit(system, 'map.saved', { file: 'logs/bestbuy_tree.json' });
         }
-        await emit(system, 'pipeline.phase.finished', { phase: 'sitemap_or_crawler', mapStatus: run.map.status });
+        await emit(system, 'workflow.stage.completed', { stage: 'discovery', outcome: run.map.status });
         return run.map;
       };
       const createPlan = async (map: FlowMap) => {
         signal.throwIfAborted();
         run.status = 'planning'; this.publish(run);
-        await emit(system, 'pipeline.phase.started', { phase: 'orchestrator' });
+        await emit(system, 'workflow.stage.started', { stage: 'planning' });
         const orchestrator = await harness.register_agent_execution(runCtx, { agent_id: 'orchestrator' });
-        const { plan, file } = await Sentry.startSpan({ name: 'orchestration', op: 'agent',
+        const { plan, file } = await withSpan({ name: 'orchestration', op: 'agent',
           attributes: { run_id: run.id, agent_execution_id: orchestrator.agent_execution_id } }, () =>
           harness.wrapToolCall(orchestrator, () =>
             orchestratePaths(map, run.prompt, run.id, model, harness, orchestrator, signal), { name: 'orchestration' }));
         run.plan = plan;
-        await emit(orchestrator, 'plan.created', { ...plan, file });
-        await emit(system, 'pipeline.phase.finished', { phase: 'orchestrator', paths: plan.paths.length, file });
+        const planEvent = await emit(orchestrator, 'plan.created', { ...plan, file });
+        await harness.emit_event(orchestrator, { event_type: 'decision.recorded', validate_metadata: true,
+          metadata: {
+            decision: `Selected ${plan.paths.length} execution path${plan.paths.length === 1 ? '' : 's'}`,
+            assumptions: [`The discovered flow map is ${map.status} and suitable for path execution`],
+            evidence_event_ids: [planEvent.event_id],
+            alternatives_considered: plan.skipped.slice(0, 10).map(item => `${item.transitionId}: ${item.reason}`),
+            confidence: map.status === 'complete' || map.status === 'provided' ? 'HIGH' : 'MEDIUM',
+            uncertainties: map.notes,
+            next_action: plan.paths.length ? 'Dispatch selected paths to isolated workers' : 'Stop because no executable path was selected',
+          } });
+        await emit(system, 'workflow.stage.completed', { stage: 'planning', outcome: plan.paths.length ? 'ready' : 'blocked', paths: plan.paths.length, file });
         return plan;
       };
 
@@ -126,7 +138,7 @@ export class Runner {
       const plan = await createPlan(map);
       signal.throwIfAborted();
       run.status = 'running'; this.publish(run);
-      await emit(system, 'pipeline.phase.started', { phase: 'workers', paths: plan.paths.length });
+      await emit(system, 'workflow.stage.started', { stage: 'execution', paths: plan.paths.length });
       await pool(plan.paths, run.maxWorkers, signal, async (task, index) => {
         const worker = await harness.register_agent_execution(runCtx, { agent_id: `worker-${index + 1}`, assigned_task: task.name });
         const workerSignal = AbortSignal.any([signal, AbortSignal.timeout(config.workerTimeout)]);
@@ -134,7 +146,7 @@ export class Runner {
         try {
           await emit(worker, 'agent.started', { assignedTask: task.name, instructions: task.instructions });
           session = await open(worker, workerSignal);
-          const result = await Sentry.startSpan({ name: 'worker', op: 'agent',
+          const result = await withSpan({ name: 'worker', op: 'agent',
             attributes: { run_id: run.id, agent_execution_id: worker.agent_execution_id } }, () =>
             harness.wrapToolCall(worker, () => executeNodeSequence(task, map, run.prompt,
               url => session!.page(url), model, harness, worker, workerSignal, instruction => {
@@ -158,7 +170,7 @@ export class Runner {
           await session?.close(); this.publish(run);
         }
       });
-      await emit(system, 'pipeline.phase.finished', { phase: 'workers', results: run.results.length });
+      await emit(system, 'workflow.stage.completed', { stage: 'execution', outcome: run.results.every(r => r.status === 'succeeded') ? 'succeeded' : 'failed', results: run.results.length });
       signal.throwIfAborted();
       run.status = !run.results.length ? 'blocked' : run.results.every(r => r.status === 'succeeded') ? 'succeeded' : 'completed_with_failures';
       await emit(system, 'run.finished', { status: run.status, results: run.results });

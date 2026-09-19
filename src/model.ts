@@ -3,7 +3,7 @@ import { zodFunction, zodTextFormat } from 'openai/helpers/zod';
 import type { z } from 'zod';
 import { config } from './config.js';
 import { redact } from './telemetry.js';
-import { Sentry } from './telemetry.js';
+import { withSpan } from './telemetry.js';
 import type { AgentExecutionContext, Harness } from './sdk/index.js';
 
 /** Owned by one sequential crawl; never shared across runs or agent roles. */
@@ -19,7 +19,7 @@ export class OpenAIModel implements Model {
     options: ModelOptions = {}): Promise<z.infer<T>> {
     signal.throwIfAborted();
     if (options.session && !options.reasoningEffort) throw new Error('Response sessions require the Responses API');
-    return Sentry.startSpan({ name: 'model.call', op: 'gen_ai.request',
+    return withSpan({ name: 'model.call', op: 'gen_ai.request',
       attributes: { run_id: agent.run_id, agent_execution_id: agent.agent_execution_id, agent_id: agent.agent_id, function: name } }, async () => {
       const content = JSON.stringify(redact(input));
       const model = options.model || config.model;
@@ -69,14 +69,14 @@ export class OpenAIModel implements Model {
         }
         const duration_ms = Date.now() - begun;
         const finished = await harness.emit_event(agent, { event_type: 'model.response',
-          metadata: { api, function: name, responseId: responseId ?? null, result, usage, duration_ms } });
+          metadata: { api, model, function: name, responseId: responseId ?? null, result, usage, duration_ms } });
         await harness.record_event_link({ run_id: agent.run_id, source_event_id: finished.event_id,
           target_event_id: started.event_id, relationship_type: 'consumes_output' });
         return result;
       } catch (error) {
         const duration_ms = Date.now() - begun;
         const finished = await harness.emit_event(agent, { event_type: 'model.failed',
-          metadata: { api, function: name, error: String(error), duration_ms } });
+          metadata: { api, model, function: name, error: String(error), duration_ms } });
         await harness.record_event_link({ run_id: agent.run_id, source_event_id: finished.event_id,
           target_event_id: started.event_id, relationship_type: 'consumes_output' });
         throw error;

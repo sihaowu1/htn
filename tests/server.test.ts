@@ -23,6 +23,7 @@ test('HTTP server serves bare frontend and validates runs without leaking creden
     }
     assert.ok(ready, output);
     assert.match(await (await fetch(origin)).text(), /Maximum simultaneous workers/);
+    assert.equal((await fetch(origin + '/vendor/hls/hls.min.js')).status, 200);
     const configuration = await (await fetch(origin + '/api/config')).json();
     assert.deepEqual(configuration.missingCredentials.sort(), ['BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'DATABASE_URL', 'OPENAI_API_KEY', 'SENTRY_DSN']);
     const post = (body: unknown) => fetch(origin + '/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -30,6 +31,7 @@ test('HTTP server serves bare frontend and validates runs without leaking creden
     assert.equal((await post({ prompt: 'Search', maxWorkers: 1, targetUrl: 'http://localhost:8080' })).status, 400);
     assert.equal((await post({ prompt: 'Search', maxWorkers: 1, targetUrl: 'https://example.com' })).status, 503);
     assert.equal((await fetch(origin + '/api/runs/unknown')).status, 404);
+    assert.equal((await fetch(origin + '/api/runs/unknown/sessions/unknown/replay')).status, 404);
   } finally {
     child.kill();
     await new Promise<void>(resolve => { if (child.exitCode !== null) resolve(); else child.once('exit', () => resolve()); });

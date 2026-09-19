@@ -145,7 +145,7 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
         filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
       )`);
       const names = ['001_runs_and_agent_executions.sql', '002_events.sql', '003_event_links.sql',
-        '004_artifacts.sql', '005_investigations.sql'];
+        '004_artifacts.sql', '005_investigations.sql', '006_dashboard_runs.sql'];
       for (const name of names) {
         const found = await client.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [name]);
         if (found.rowCount) continue;
@@ -161,8 +161,10 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
 
   async storeRun(run: Run): Promise<void> {
     await this.db.query(
-      'INSERT INTO runs (run_id, goal, created_at) VALUES ($1, $2, $3) ON CONFLICT (run_id) DO NOTHING',
-      [run.run_id, run.goal, run.created_at],
+      `INSERT INTO runs (run_id, goal, created_at, workflow_type, status, completed_at, tags)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (run_id) DO NOTHING`,
+      [run.run_id, run.goal, run.created_at, run.workflow_type, run.status,
+        run.completed_at ?? null, JSON.stringify(run.tags)],
     );
   }
 
@@ -194,8 +196,16 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
           event.parent_span_id ?? null, JSON.stringify(event.metadata), event.schema_version],
       );
       if (result.rowCount === 0) await this.detectConflictingReuse(event, client);
-      else await enqueueInvestigationForEvent(client, { runId: event.run_id, eventId: event.event_id,
-        type: event.event_type, data: event.metadata });
+      else {
+        await enqueueInvestigationForEvent(client, { runId: event.run_id, eventId: event.event_id,
+          type: event.event_type, data: event.metadata });
+        if (event.event_type === 'run.finished' || event.event_type === 'run.failed') {
+          const status = textField(event.metadata, ['status', 'outcome']) ||
+            (event.event_type === 'run.failed' ? 'failed' : 'completed');
+          await client.query('UPDATE runs SET status = $2, completed_at = $3 WHERE run_id = $1',
+            [event.run_id, status, event.occurred_at]);
+        }
+      }
       await client.query('COMMIT');
       this.emit('event', legacyEvent(event, execution.rows[0].agent_id));
     } catch (error) {
@@ -278,6 +288,120 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
     const result = await this.db.query(`SELECT r.report, r.investigation_id, r.revision, r.created_at,
       j.status, j.signal, j.last_error FROM investigation_jobs j
       LEFT JOIN investigation_reports r USING (job_id) WHERE j.run_id = $1 ORDER BY j.created_at DESC`, [runId]);
+    return result.rows;
+  }
+
+  async listRuns(input: { search?: string; status?: string; workflowType?: string;
+    failureCategory?: string; investigationStatus?: string; from?: string; to?: string;
+    limit: number; offset: number }) {
+    const values: unknown[] = [];
+    const where: string[] = [];
+    const add = (sql: string, value: unknown) => { values.push(value); where.push(sql.replace('?', `$${values.length}`)); };
+    if (input.status) add('r.status = ?', input.status);
+    if (input.workflowType) add('r.workflow_type = ?', input.workflowType);
+    if (input.from) add('r.created_at >= ?', input.from);
+    if (input.to) add('r.created_at <= ?', input.to);
+    if (input.failureCategory) add(`EXISTS (SELECT 1 FROM investigation_reports ir
+      WHERE ir.run_id = r.run_id AND ir.report->'likely_cause'->>'category' = ?)`, input.failureCategory);
+    if (input.investigationStatus) add(`EXISTS (SELECT 1 FROM investigation_jobs ij
+      WHERE ij.run_id = r.run_id AND ij.status = ?)`, input.investigationStatus);
+    if (input.search) {
+      values.push(`%${input.search}%`);
+      where.push(`(r.goal ILIKE $${values.length} OR r.run_id::text ILIKE $${values.length} OR EXISTS (
+        SELECT 1 FROM agent_executions ax LEFT JOIN events ex USING (agent_execution_id)
+        WHERE ax.run_id = r.run_id AND (ax.agent_id ILIKE $${values.length} OR ex.event_type ILIKE $${values.length}
+          OR ex.metadata::text ILIKE $${values.length})))`);
+    }
+    values.push(input.limit, input.offset);
+    const filter = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const result = await this.db.query(`SELECT r.*,
+      COUNT(DISTINCT a.agent_execution_id)::int AS agent_count,
+      COUNT(DISTINCT e.event_id)::int AS event_count,
+      COUNT(DISTINCT e.event_id) FILTER (WHERE e.event_type = 'model.request')::int AS model_call_count,
+      COUNT(DISTINCT e.event_id) FILTER (WHERE e.event_type = 'tool.started')::int AS tool_call_count,
+      COUNT(DISTINCT e.event_id) FILTER (WHERE e.event_type LIKE 'retry.%')::int AS retry_count,
+      COUNT(DISTINCT ar.artifact_id)::int AS artifact_count,
+      COUNT(DISTINCT ic.cluster_id)::int AS failure_count,
+      COUNT(DISTINCT ij.job_id) FILTER (WHERE ij.status IN ('queued','running'))::int AS investigation_backlog,
+      EXTRACT(EPOCH FROM (COALESCE(r.completed_at, clock_timestamp()) - r.created_at)) * 1000 AS duration_ms,
+      (ARRAY_AGG(ir.outcome ORDER BY ir.created_at DESC) FILTER (WHERE ir.outcome IS NOT NULL))[1] AS investigation_outcome,
+      (ARRAY_AGG(ir.report->'likely_cause'->>'category' ORDER BY ir.created_at DESC)
+        FILTER (WHERE ir.report->'likely_cause'->>'category' IS NOT NULL))[1] AS failure_category,
+      (ARRAY_AGG(ir.report->'likely_cause'->>'confidence' ORDER BY ir.created_at DESC)
+        FILTER (WHERE ir.report->'likely_cause'->>'confidence' IS NOT NULL))[1] AS confidence,
+      COUNT(*) OVER()::int AS total_count
+      FROM runs r LEFT JOIN agent_executions a USING (run_id) LEFT JOIN events e USING (agent_execution_id)
+      LEFT JOIN artifacts ar ON ar.run_id = r.run_id LEFT JOIN incident_clusters ic ON ic.run_id = r.run_id
+      LEFT JOIN investigation_jobs ij ON ij.run_id = r.run_id LEFT JOIN investigation_reports ir ON ir.run_id = r.run_id
+      ${filter} GROUP BY r.run_id ORDER BY r.created_at DESC
+      LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
+    return { items: result.rows, total: Number(result.rows[0]?.total_count || 0), limit: input.limit, offset: input.offset };
+  }
+
+  async getRunSummary(runId: string) {
+    const run = await this.db.query('SELECT * FROM runs WHERE run_id = $1', [runId]);
+    if (!run.rowCount) return null;
+    const [agents, counts, clusters, investigations] = await Promise.all([
+      this.db.query(`SELECT a.*, COUNT(e.event_id)::int AS event_count,
+        COUNT(e.event_id) FILTER (WHERE e.event_type LIKE 'retry.%')::int AS retry_count,
+        MIN(e.occurred_at) AS first_event_at, MAX(e.occurred_at) AS last_event_at,
+        (ARRAY_AGG(e.event_type ORDER BY e.sequence_number DESC) FILTER (WHERE e.event_id IS NOT NULL))[1] AS last_event,
+        (ARRAY_AGG(e.metadata->>'outcome' ORDER BY e.sequence_number DESC)
+          FILTER (WHERE e.event_type = 'agent.completed'))[1] AS outcome
+        FROM agent_executions a LEFT JOIN events e USING (agent_execution_id)
+        WHERE a.run_id = $1 GROUP BY a.agent_execution_id ORDER BY a.created_at`, [runId]),
+      this.db.query(`SELECT COUNT(*)::int AS events,
+        COUNT(*) FILTER (WHERE event_type = 'model.request')::int AS model_calls,
+        COUNT(*) FILTER (WHERE event_type = 'tool.started')::int AS tool_calls,
+        COUNT(*) FILTER (WHERE event_type LIKE 'retry.%')::int AS retries,
+        COUNT(*) FILTER (WHERE event_type ~ '(failed|failure|error)$')::int AS failures,
+        MIN(occurred_at) AS first_event_at, MAX(occurred_at) AS last_event_at,
+        PERCENTILE_CONT(.5) WITHIN GROUP (ORDER BY (metadata->>'duration_ms')::numeric)
+          FILTER (WHERE metadata ? 'duration_ms') AS latency_p50_ms,
+        PERCENTILE_CONT(.95) WITHIN GROUP (ORDER BY (metadata->>'duration_ms')::numeric)
+          FILTER (WHERE metadata ? 'duration_ms') AS latency_p95_ms
+        FROM events WHERE run_id = $1`, [runId]),
+      this.db.query(`SELECT c.*, COUNT(t.event_id)::int AS occurrences FROM incident_clusters c
+        LEFT JOIN incident_triggers t USING (cluster_id) WHERE c.run_id = $1 GROUP BY c.cluster_id
+        ORDER BY c.first_triggered_at`, [runId]),
+      this.listInvestigations(runId),
+    ]);
+    return { ...run.rows[0], metrics: counts.rows[0], agents: agents.rows,
+      failures: clusters.rows, investigations };
+  }
+
+  async queryEvents(runId: string, input: { search?: string; type?: string; agent?: string; limit: number; offset: number }) {
+    const values: unknown[] = [runId]; const where = ['e.run_id = $1'];
+    if (input.type) { values.push(input.type); where.push(`e.event_type = $${values.length}`); }
+    if (input.agent) { values.push(input.agent); where.push(`a.agent_id = $${values.length}`); }
+    if (input.search) { values.push(`%${input.search}%`); where.push(`(e.event_type ILIKE $${values.length} OR e.metadata::text ILIKE $${values.length})`); }
+    values.push(input.limit, input.offset);
+    const result = await this.db.query(`SELECT e.*, a.agent_id, COUNT(*) OVER()::int AS total_count
+      FROM events e JOIN agent_executions a USING (agent_execution_id) WHERE ${where.join(' AND ')}
+      ORDER BY e.occurred_at, e.event_id LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
+    return { items: result.rows, total: Number(result.rows[0]?.total_count || 0), limit: input.limit, offset: input.offset };
+  }
+
+  async getRunGraph(runId: string) {
+    const [nodes, edges] = await Promise.all([
+      this.db.query(`SELECT e.event_id AS id, e.event_type AS type, e.agent_execution_id, a.agent_id, e.session_id,
+        e.occurred_at, e.ingested_at, e.sequence_number, e.trace_id, e.span_id, e.parent_span_id,
+        e.schema_version, e.metadata FROM events e JOIN agent_executions a USING (agent_execution_id)
+        WHERE e.run_id = $1 ORDER BY e.occurred_at, e.event_id`, [runId]),
+      this.db.query(`SELECT source_event_id AS source, target_event_id AS target, relationship_type AS relationship,
+        false AS inferred FROM event_links WHERE run_id = $1`, [runId]),
+    ]);
+    return { nodes: nodes.rows, edges: edges.rows };
+  }
+
+  async getDashboardMetrics() {
+    const result = await this.db.query(`SELECT date_trunc('day', r.created_at) AS day, r.status,
+      COUNT(DISTINCT r.run_id)::int AS runs,
+      COUNT(DISTINCT ic.cluster_id)::int AS failures,
+      COUNT(DISTINCT ij.job_id) FILTER (WHERE ij.status IN ('queued','running'))::int AS investigation_backlog,
+      COUNT(DISTINCT ir.investigation_id) FILTER (WHERE ir.outcome = 'INSUFFICIENT_EVIDENCE')::int AS insufficient_evidence
+      FROM runs r LEFT JOIN incident_clusters ic USING (run_id) LEFT JOIN investigation_jobs ij USING (run_id)
+      LEFT JOIN investigation_reports ir USING (run_id) GROUP BY 1,2 ORDER BY 1`);
     return result.rows;
   }
 
@@ -373,6 +497,7 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
       triggerEventId, ...report.observed_facts.flatMap(f => f.event_ids),
       ...report.related_event_ids, ...(report.likely_cause?.supporting_event_ids || []),
       ...(report.earliest_relevant_event_id ? [report.earliest_relevant_event_id] : []),
+      ...report.recovery_events, ...report.assumption_event_ids,
     ]);
     const executionIds = new Set(report.affected_agent_execution_ids);
     const artifactIds = new Set(report.artifact_ids);

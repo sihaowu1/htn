@@ -57,6 +57,9 @@ export const causeCategorySchema = z.enum([
   'APPLICATION_DEFECT', 'AGENT_MISTAKE', 'STATE_RACE', 'HANDOFF_CORRUPTION', 'EXPECTED_STOP', 'UNKNOWN',
 ]);
 export const investigationReportDraftSchema = z.object({
+  summary: z.string().nullable().default(null),
+  title: z.string().nullable().default(null),
+  impact: z.string().nullable().default(null),
   outcome: investigationOutcomeSchema,
   observed_failure: z.string().nullable(),
   earliest_relevant_event_id: z.string().uuid().nullable(),
@@ -75,6 +78,9 @@ export const investigationReportDraftSchema = z.object({
   reproduction_step: z.string().nullable(),
   artifact_ids: z.array(z.string().uuid()),
   trace_ids: z.array(z.string()),
+  recovery_events: z.array(z.string().uuid()).default([]),
+  assumption_event_ids: z.array(z.string().uuid()).default([]),
+  recommended_owner: z.enum(['application', 'agent', 'infrastructure', 'unknown']).default('unknown'),
 });
 export type InvestigationReportDraft = z.infer<typeof investigationReportDraftSchema>;
 export type InvestigationReport = InvestigationReportDraft & {
@@ -95,6 +101,12 @@ export type LogEvent = Identity & {
 export type SessionInfo = {
   agentId: string; role: string; sessionId: string; liveUrl: string; status: string; instruction?: string;
 };
+export type ReplayPage = {
+  page_id: string; start_time_ms: number; end_time_ms: number; playlist_url: string;
+};
+export type ReplayResponse =
+  | { status: 'available'; session_id: string; pages: ReplayPage[] }
+  | { status: 'pending'; retry_after_ms: number };
 export type Run = {
   id: string; prompt: string; targetUrl: string; maxWorkers: number;
   status: string; sessions: SessionInfo[]; map?: FlowMap; plan?: Plan;

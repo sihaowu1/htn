@@ -3,9 +3,10 @@ import { createHash } from 'node:crypto';
 import Browserbase from '@browserbasehq/sdk';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { Action, Snapshot, SessionInfo } from './types.js';
-import { Sentry } from './telemetry.js';
+import { withSpan } from './telemetry.js';
 import type { AgentExecutionContext, Harness } from './sdk/index.js';
 import { FIXTURE_LOGIN_PASSWORD, FIXTURE_PASSWORD_TOKEN } from './fixture-credentials.js';
+import { config } from './config.js';
 
 const snapshotScript = await readFile(new URL('../scripts/dom-snapshot.js', import.meta.url), 'utf8');
 
@@ -42,7 +43,7 @@ async function emitSnapshotEvent(harness: Harness, agent: AgentExecutionContext,
 
 export async function perform(page: Page, action: Action, harness: Harness, agent: AgentExecutionContext, signal: AbortSignal) {
   signal.throwIfAborted();
-  await Sentry.startSpan({ name: 'browser.action', op: 'agent',
+  await withSpan({ name: 'browser.action', op: 'agent',
     attributes: { run_id: agent.run_id, agent_execution_id: agent.agent_execution_id,
       action_kind: action.kind, action_selector: action.selector } }, () =>
     harness.wrapToolCall(agent, async () => {
@@ -83,6 +84,7 @@ export class BrowserSession {
     // interaction, observation, and decisions belong to our own workers.
     const sdk = new Browserbase({ apiKey: process.env.BROWSERBASE_API_KEY, timeout: 30_000, maxRetries: 1 });
     const session = await sdk.sessions.create({ projectId: process.env.BROWSERBASE_PROJECT_ID!, api_timeout: 1800,
+      browserSettings: { recordSession: config.browserbaseReplayEnabled },
       userMetadata: { run_id: agent.run_id, agent_execution_id: agent.agent_execution_id, agent_id: agent.agent_id } });
     agent.setSessionId(session.id);
     try {

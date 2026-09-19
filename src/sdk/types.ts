@@ -22,6 +22,10 @@ export const runSchema = z.object({
   run_id: uuidSchema,
   goal: z.string().min(1).max(8000),
   created_at: isoTimeSchema,
+  workflow_type: z.string().min(1).max(200).default('browser_qa'),
+  status: z.string().min(1).max(100).default('starting'),
+  completed_at: isoTimeSchema.optional(),
+  tags: z.record(z.string(), z.string()).default({}),
 });
 export type Run = z.infer<typeof runSchema>;
 
@@ -71,8 +75,10 @@ export type EventLink = z.infer<typeof eventLinkSchema>;
 export const startRunInputSchema = z.object({
   goal: z.string().trim().min(1).max(8000),
   run_id: uuidSchema.optional(),
+  workflow_type: z.string().trim().min(1).max(200).default('browser_qa'),
+  tags: z.record(z.string(), z.string()).default({}),
 });
-export type StartRunInput = z.infer<typeof startRunInputSchema>;
+export type StartRunInput = z.input<typeof startRunInputSchema>;
 
 export const registerAgentInputSchema = z.object({
   agent_id: z.string().trim().min(1).max(500),

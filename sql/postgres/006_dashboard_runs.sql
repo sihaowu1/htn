@@ -1,0 +1,11 @@
+BEGIN;
+
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS workflow_type TEXT NOT NULL DEFAULT 'browser_qa';
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'starting';
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE INDEX IF NOT EXISTS runs_created_at_idx ON runs (created_at DESC);
+CREATE INDEX IF NOT EXISTS runs_status_idx ON runs (status, created_at DESC);
+
+COMMIT;

@@ -1,3 +1,4 @@
+import './telemetry.js';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
@@ -6,6 +7,7 @@ import { config } from './config.js';
 import { PgAdapter, type InvestigationJob } from './sdk/index.js';
 import { EvidenceTools } from './evidence-tools.js';
 import { InvestigationAgent } from './investigation.js';
+import { closeTelemetry, emitMetric, withSpan } from './telemetry.js';
 
 export class ObserverWorker {
   private workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
@@ -50,6 +52,8 @@ export class ObserverWorker {
       while (!this.stopped && this.active < config.investigationConcurrency) {
         const job = await this.db.claimJob(this.workerId);
         if (!job) break;
+        emitMetric({ kind: 'count', name: 'htn.investigation.jobs', value: 1,
+          attributes: { outcome: 'claimed' } });
         this.active++;
         void this.runJob(job).finally(() => { this.active--; void this.drain(); });
       }
@@ -58,6 +62,9 @@ export class ObserverWorker {
   }
 
   private async runJob(job: InvestigationJob) {
+    return withSpan({ name: 'investigation.job', op: 'agent.investigation',
+      attributes: { run_id: job.runId, investigation_job_id: job.jobId } }, async () => {
+    const begun = performance.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(new Error('Investigation lease expired')),
       Math.max(1000, config.investigationLeaseMs - 1000));
@@ -71,9 +78,18 @@ export class ObserverWorker {
       const report = await new InvestigationAgent(tools).run({ run_id: job.runId,
         event_id: job.triggerEventId, goal: job.goal, signal: job.signal }, controller.signal);
       await this.db.completeJob(job, this.workerId, report, config.model);
+      emitMetric({ kind: 'count', name: 'htn.investigation.jobs', value: 1,
+        attributes: { outcome: 'succeeded' } });
+      emitMetric({ kind: 'distribution', name: 'htn.investigation.duration',
+        value: performance.now() - begun, unit: 'millisecond', attributes: { outcome: 'succeeded' } });
     } catch (error) {
       await this.db.failJob(job, this.workerId, error);
+      const outcome = job.attemptCount >= config.investigationMaxAttempts ? 'dead_lettered' : 'retried';
+      emitMetric({ kind: 'count', name: 'htn.investigation.jobs', value: 1, attributes: { outcome } });
+      emitMetric({ kind: 'distribution', name: 'htn.investigation.duration',
+        value: performance.now() - begun, unit: 'millisecond', attributes: { outcome } });
     } finally { clearTimeout(timeout); clearInterval(heartbeat); }
+    });
   }
 
   async stop() {
@@ -93,7 +109,7 @@ async function main() {
   let stopping = false;
   const stop = async () => {
     if (stopping) return; stopping = true;
-    await worker.stop(); await db.close(); process.exit(0);
+    await worker.stop(); await db.close(); await closeTelemetry(2000); process.exit(0);
   };
   process.on('SIGINT', () => void stop());
   process.on('SIGTERM', () => void stop());

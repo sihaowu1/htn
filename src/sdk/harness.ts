@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { validateCatalogMetadata } from './catalog.js';
 import { AgentExecutionContext, RunContext } from './context.js';
 import { redact } from './redact.js';
-import { Sentry } from '../telemetry.js';
+import { activeTraceContext, emitMetric, emitMetrics, metricsForEvent, Sentry } from '../telemetry.js';
 import {
   attachArtifactInputSchema,
   emitEventInputSchema,
@@ -32,6 +32,15 @@ import {
 } from './types.js';
 
 export const DEFAULT_MAX_METADATA_BYTES = 32_768;
+
+function roleForAgent(agentId: string): string {
+  if (agentId === 'observer') return 'observer';
+  if (agentId === 'system') return 'system';
+  if (agentId === 'crawler') return 'crawler';
+  if (agentId === 'orchestrator') return 'orchestrator';
+  if (agentId === 'worker' || agentId.startsWith('worker-')) return 'worker';
+  return 'system';
+}
 
 export interface ArtifactContent {
   runId: string;
@@ -71,7 +80,7 @@ export class Harness {
 
   async start_run(raw: StartRunInput): Promise<RunContext> {
     const input = parse(startRunInputSchema, raw, 'start_run input');
-    const ctx = new RunContext(input.goal, input.run_id);
+    const ctx = new RunContext(input.goal, input.run_id, input.workflow_type, input.tags);
     await this.adapter.storeRun(ctx.toRun());
     return ctx;
   }
@@ -90,6 +99,10 @@ export class Harness {
     const size = metadataByteSize(redacted);
     if (size > limit) throw new MetadataTooLargeError(size, limit);
     const now = new Date().toISOString();
+    const active = activeTraceContext();
+    const traceId = opts?.trace_id ?? active.trace_id;
+    const spanId = opts?.span_id ?? active.span_id;
+    const parentSpanId = opts?.parent_span_id ?? active.parent_span_id;
     return parse(eventSchema, {
       event_id: randomUUID(),
       run_id: agentCtx.run_id,
@@ -98,17 +111,29 @@ export class Harness {
       occurred_at: now,
       sequence_number: agentCtx.nextSequence(),
       event_type: eventType,
-      ...(opts?.trace_id ? { trace_id: opts.trace_id } : {}),
-      ...(opts?.span_id ? { span_id: opts.span_id } : {}),
-      ...(opts?.parent_span_id ? { parent_span_id: opts.parent_span_id } : {}),
+      ...(traceId ? { trace_id: traceId } : {}),
+      ...(spanId ? { span_id: spanId } : {}),
+      ...(parentSpanId ? { parent_span_id: parentSpanId } : {}),
       metadata: redacted,
       schema_version: 1,
     }, 'event envelope');
   }
 
   private async persist(agentCtx: AgentExecutionContext, event: Event): Promise<Event> {
-    await this.adapter.storeEvent(event);
+    const begun = performance.now();
     try {
+      await this.adapter.storeEvent(event);
+    } catch (error) {
+      emitMetric({ kind: 'distribution', name: 'htn.harness.persist.duration',
+        value: performance.now() - begun, unit: 'millisecond',
+        attributes: { agent_role: roleForAgent(agentCtx.agent_id), outcome: 'failed' } });
+      throw error;
+    }
+    try {
+      emitMetric({ kind: 'distribution', name: 'htn.harness.persist.duration',
+        value: performance.now() - begun, unit: 'millisecond',
+        attributes: { agent_role: roleForAgent(agentCtx.agent_id), outcome: 'succeeded' } });
+      emitMetrics(metricsForEvent(event, roleForAgent(agentCtx.agent_id)));
       Sentry.withScope(scope => {
         scope.setTags({ runId: agentCtx.run_id, agentId: agentCtx.agent_id,
           agentExecutionId: agentCtx.agent_execution_id, sessionId: agentCtx.getSessionId() || 'none' });
@@ -221,6 +246,8 @@ export class Harness {
     const artifact_id = await this.adapter.storeArtifactContent({ runId: agentCtx.run_id,
       agentExecutionId: agentCtx.agent_execution_id, kind: input.kind,
       mimeType: input.mimeType ?? 'application/json', content });
+    emitMetric({ kind: 'distribution', name: 'htn.artifact.bytes', value: content.byteLength,
+      unit: 'byte', attributes: { artifact_kind: input.kind } });
     return { artifact_id, size_bytes: content.byteLength };
   }
 

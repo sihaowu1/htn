@@ -226,6 +226,7 @@ const pgTest = pgEnabled ? test : test.skip.bind(test);
 pgTest('pg adapter persists run, execution, events, links with idempotent retries', async (t) => {
   const adapter = new PgAdapter();
   try {
+    await adapter.init();
     const harness = new Harness(adapter);
     const run = await harness.start_run({ goal: 'pg round-trip' });
     const agent = await harness.register_agent_execution(run, { agent_id: 'pg-worker' });
