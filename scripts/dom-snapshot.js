@@ -30,7 +30,8 @@
       ...(document.querySelector('iframe') ? ['iframe contents are not explored'] : []),
       ...(document.querySelector('canvas') ? ['canvas controls are not explored'] : []),
       ...(Array.from(document.querySelectorAll('*')).some(e => e.shadowRoot) ? ['shadow DOM is not explored'] : []),
-      ...(document.querySelector('input[type="file"],input[type="password"]') ? ['file uploads and password inputs are not explored'] : []),
+      ...(document.querySelector('input[type="file"]') ? ['file uploads are not explored'] : []),
+      ...(document.querySelector('input[type="password"]') ? ['password inputs require fixture sign-in'] : []),
       ...(document.querySelector('[contenteditable="true"]') ? ['contenteditable controls are not explored'] : []),
     ] };
 })()

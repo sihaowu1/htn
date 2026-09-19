@@ -1,0 +1,21 @@
+<!doctype html><title>Cart history fixture</title><body><script>
+const params = new URLSearchParams(location.search);
+const product = params.get('product');
+const view = params.get('view');
+const step = Number(params.get('step') || 0);
+if (params.has('step')) {
+  document.body.innerHTML = step < 10 ? `<a href="/?step=${step + 1}">Next step</a>` : '<h1>Long route complete</h1>';
+} else if (product) {
+  document.body.innerHTML = `<h1>${product}</h1><button>Add to Cart</button>`;
+  document.querySelector('button').onclick = () => {
+    localStorage.setItem('cart', product);
+    location.href = '/?view=category';
+  };
+} else if (view === 'category') {
+  document.body.innerHTML = '<h1>Category</h1><p>Cart 1</p><a href="/?view=checkout">Checkout</a>';
+} else if (view === 'checkout') {
+  document.body.innerHTML = `<h1>Checkout</h1><p>Cart: ${localStorage.getItem('cart')}</p><label>Test payment<input type="text"></label>`;
+} else {
+  document.body.innerHTML = '<a href="/?product=TV">TV</a><a href="/?product=Controller">Controller</a><a href="/?step=0">Long route</a>';
+}
+</script></body>

@@ -12,6 +12,40 @@ import { EventLog, Trace } from '../src/telemetry.js';
 import { validateMap } from '../src/flow.js';
 import type { Model } from '../src/model.js';
 import type { FlowMap } from '../src/types.js';
+import { serveLocalWebsite } from '../src/crawler/local-site.js';
+import { fixtureLoginActions } from '../src/fixture-credentials.js';
+
+test('real mock login preserves the cart, returns to checkout, and rejects account creation', { skip: process.env.RUN_BROWSER_TESTS !== '1' }, async () => {
+  const site = await serveLocalWebsite();
+  const browser = await chromium.launch();
+  const dir = await mkdtemp(join(tmpdir(), 'fixture-login-'));
+  const log = new EventLog(join(dir, 'events.jsonl'), false); await log.init();
+  const trace = new Trace(log, { runId: 'login', agentId: 'worker', role: 'worker' });
+  try {
+    for (let worker = 0; worker < 3; worker++) {
+      const context = await browser.newContext(); const page = await context.newPage();
+      await page.goto(site.origin);
+      await page.evaluate(() => localStorage.setItem('bb_mock_cart', JSON.stringify({ p1: 2, p17: 1, p13: 1 })));
+      await page.goto(site.origin + '/auth.html?returnTo=checkout.html');
+      const initial = await inspect(page);
+      const create = initial.elements.find(element => element.type === 'submit' && element.label === 'Create account')!;
+      await assert.rejects(perform(page, { kind: 'click', selector: create.selector, value: '' }, trace, new AbortController().signal), /Account creation is prohibited/);
+      const password = initial.elements.find(element => element.type === 'password')!;
+      await assert.rejects(perform(page, { kind: 'press', selector: password.selector, value: 'Enter' }, trace, new AbortController().signal), /Account creation is prohibited/);
+      for (let step = 0; step < 2; step++) {
+        const actions = fixtureLoginActions(await inspect(page))!;
+        assert.ok(actions);
+        for (const action of actions) await perform(page, action, trace, new AbortController().signal);
+      }
+      assert.equal(new URL(page.url()).pathname, '/checkout.html');
+      const state = await page.evaluate(() => ({ user: JSON.parse(localStorage.getItem('bb_mock_user')!), cart: JSON.parse(localStorage.getItem('bb_mock_cart')!) }));
+      assert.equal(state.user.email, 'johnsmith@example.com');
+      assert.deepEqual(state.cart, { p1: 2, p17: 1, p13: 1 });
+      await context.close();
+    }
+    assert.equal(JSON.stringify(await log.read('login')).includes('123456'), false);
+  } finally { await browser.close(); await site.close(); await rm(dir, { recursive: true, force: true }); }
+});
 
 test('live view selects the navigated page instead of the default blank tab', () => {
   const pages = [

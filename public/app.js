@@ -147,7 +147,8 @@ $('stop').onclick = async () => {
   catch (error) { $('error').textContent = error.message; }
 };
 request('/api/config').then(config => {
-  $('workers').max = config.maxWorkers; $('workers').value = Math.min(2, config.maxWorkers);
+  $('workers').min = config.maxWorkers; $('workers').max = config.maxWorkers;
+  $('workers').value = config.maxWorkers; $('workers').readOnly = true;
   if (config.missingCredentials.length) $('error').textContent = `Configure .env and restart: ${config.missingCredentials.join(', ')}`;
 }).catch(error => { $('error').textContent = error.message; });
 const previous = localStorage.getItem('lastRun');

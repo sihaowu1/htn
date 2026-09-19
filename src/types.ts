@@ -20,6 +20,7 @@ export const mapSchema = z.object({
   version: z.literal(1), startUrl: z.string().url(), rootId: z.string(),
   status: z.enum(['complete', 'limited', 'provided']), notes: z.array(z.string()),
   states: z.array(z.object({ id: z.string(), snapshot: snapshotSchema, depth: z.number().int().nonnegative(),
+    goalAssessment: z.object({ goal: z.string(), satisfied: z.boolean(), progress: z.number().min(0).max(1), reason: z.string() }).optional(),
     task: z.string().max(2000).optional() })).min(1).max(500),
   transitions: z.array(z.object({
     id: z.string(), from: z.string(), to: z.string().nullable(),
@@ -33,6 +34,10 @@ export const planSchema = z.object({
   summary: z.string(), paths: z.array(z.object({
     name: z.string(), transitionIds: z.array(z.string()).max(30),
     instructions: z.string(), stopCondition: z.string(),
+    completion: z.enum(['goal', 'partial']).optional(),
+    limitation: z.string().optional(),
+    repeatOf: z.string().optional(),
+    exploreFrom: z.string().optional(),
   })).max(100), skipped: z.array(z.object({ transitionId: z.string(), reason: z.string() })),
 });
 export type Plan = z.infer<typeof planSchema>;

@@ -4,7 +4,7 @@ import Browserbase from '@browserbasehq/sdk';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 import type { Action, Snapshot, SessionInfo } from './types.js';
 import type { Trace } from './telemetry.js';
-import { FIXTURE_LOGIN_PASSWORD, FIXTURE_PASSWORD_TOKEN } from './fixture-credentials.js';
+import { FIXTURE_LOGIN_PASSWORD, FIXTURE_PASSWORD_TOKEN, fixtureLoginActions, isAccountCreation } from './fixture-credentials.js';
 
 const snapshotScript = await readFile(new URL('../scripts/dom-snapshot.js', import.meta.url), 'utf8');
 
@@ -15,6 +15,9 @@ export function fingerprint(snapshot: Pick<Snapshot, 'url' | 'dom' | 'elements'>
 }
 export async function inspect(page: Page): Promise<Snapshot> {
   const result = await page.evaluate(snapshotScript) as Omit<Snapshot, 'fingerprint'>;
+  if (fixtureLoginActions({ ...result, fingerprint: '' })) {
+    result.unsupported = result.unsupported.filter(reason => reason !== 'password inputs require fixture sign-in');
+  }
   if (result.dom.length > 150_000 || result.elements.length > 1000) throw new Error('Page exceeds MVP DOM size limit; use a smaller target or supplied flow map');
   return { ...result, fingerprint: fingerprint(result) };
 }
@@ -31,7 +34,13 @@ export async function perform(page: Page, action: Action, trace: Trace, signal: 
     await trace.event('action.attempt', { action });
     const locator = page.locator(action.selector);
     if (await locator.count() !== 1 || !await locator.isVisible()) throw new Error(`Action selector must match one visible element: ${action.selector}`);
-    const target = await locator.evaluate(el => ({ type: el.getAttribute('type'), actionable: el.matches('a[href],button,input,select,textarea,[role="button"],[role="link"]') }));
+    const target = await locator.evaluate(el => ({ type: el.getAttribute('type'), label: el.getAttribute('aria-label') || el.textContent || '',
+      formSubmitLabel: el.closest('form')?.querySelector('button[type="submit"],input[type="submit"]')?.textContent || '',
+      actionable: el.matches('a[href],button,input,select,textarea,[role="button"],[role="link"]') }));
+    if (isAccountCreation(target.label)) throw new Error('Account creation is prohibited; use Sign in');
+    if (action.kind === 'press' && action.value === 'Enter' && isAccountCreation(target.formSubmitLabel)) {
+      throw new Error('Account creation is prohibited; switch to Sign in before submitting');
+    }
     if (!target.actionable) throw new Error('Target is not an actionable element');
     if (target.type === 'file') throw new Error('Unsupported input type');
     if (target.type === 'password' && (action.kind !== 'fill' || action.value !== FIXTURE_PASSWORD_TOKEN)) {

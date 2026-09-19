@@ -11,6 +11,7 @@ import { executeNodeSequence } from './execution/node-sequence.js';
 import { EventLog, Trace } from './telemetry.js';
 import { type FlowMap, type Run, type Identity } from './types.js';
 import { executeSingleAction } from './worker.js';
+import { readOrDiscoverTree } from './tree-reader.js';
 
 export class Runner {
   runs = new Map<string, Run>();
@@ -18,6 +19,7 @@ export class Runner {
   constructor(public log: EventLog, private publish: (run: Run) => void) {}
   start(prompt: string, targetUrl: string, maxWorkers: number, supplied?: FlowMap, testSingleAction = false) {
     if (this.active) throw new Error('A run is already active');
+    maxWorkers = testSingleAction ? 1 : config.maxWorkers;
     const run: Run = { id: randomUUID(), prompt, targetUrl, maxWorkers, status: 'starting', sessions: [], findings: [], results: [] };
     const controller = new AbortController();
     this.runs.set(run.id, run);
@@ -79,20 +81,28 @@ export class Runner {
           run.map = validateMap(supplied, run.targetUrl);
           await system.event('map.imported', { status: run.map.status });
         } else {
-          const t = trace('crawler');
-          const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
-          try {
-            run.map = await t.span('discovery', () => crawl(run.targetUrl, run.prompt, model, t, discoverySignal,
-              map => { run.map = map; this.publish(run); }));
-          } catch (error) {
-            if (signal.aborted || !run.map) throw error;
-            const note = `Discovery stopped at the ${config.crawlTimeout} ms crawl timeout; unexplored branches remain.`;
-            run.map = { ...run.map, status: 'limited', notes: [...run.map.notes, note] };
-            await t.event('discovery.timeout', { note, states: run.map.states.length, transitions: run.map.transitions.length });
-          }
-          await mkdir('logs', { recursive: true });
-          await writeFile('logs/bestbuy_tree.json', JSON.stringify(run.map, null, 2) + '\n', 'utf8');
-          await system.event('map.saved', { file: 'logs/bestbuy_tree.json' });
+          const tree = await readOrDiscoverTree(run.targetUrl, async () => {
+            const t = trace('crawler');
+            const discoverySignal = AbortSignal.any([signal, AbortSignal.timeout(config.crawlTimeout)]);
+            try {
+              run.map = await t.span('discovery', () => crawl(run.targetUrl, run.prompt, model, t, discoverySignal,
+                map => { run.map = map; this.publish(run); }));
+            } catch (error) {
+              if (signal.aborted || !run.map) throw error;
+              const timedOut = discoverySignal.aborted;
+              const note = timedOut ? `Discovery stopped at the ${config.crawlTimeout} ms crawl timeout; unexplored branches remain.`
+                : `Discovery stopped after an error: ${String(error)}; unexplored branches remain.`;
+              run.map = { ...run.map, status: 'limited', notes: [...run.map.notes, note] };
+              await t.event(timedOut ? 'discovery.timeout' : 'discovery.interrupted', { note, states: run.map.states.length, transitions: run.map.transitions.length });
+            }
+            await mkdir('logs', { recursive: true });
+            await writeFile('logs/bestbuy_tree.json', JSON.stringify(run.map, null, 2) + '\n', 'utf8');
+            await system.event('map.saved', { file: 'logs/bestbuy_tree.json' });
+            return run.map!;
+          });
+          run.map = tree.map;
+          await system.event(tree.source === 'cache' ? 'map.cache.loaded' : 'map.cache.saved', { file: tree.file, status: run.map.status });
+          this.publish(run);
         }
         await system.event('pipeline.phase.finished', { phase: 'sitemap_or_crawler', mapStatus: run.map.status });
         return run.map;
