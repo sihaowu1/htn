@@ -1,8 +1,8 @@
 // Mock product catalog for the disposable test store.
 const PRODUCTS = [
-  { id: "p1", name: "Vantage 55\" 4K OLED TV", category: "TVs", price: 1299.99, rating: 4.6, color: "#0b1f3a", blurb: "Stunning 4K OLED picture with smart streaming built in." },
-  { id: "p2", name: "Crestline 65\" QLED TV", category: "TVs", price: 899.99, rating: 4.3, color: "#123a5c", blurb: "Bright, vivid QLED colors for movie night." },
-  { id: "p3", name: "Aperture 43\" LED TV", category: "TVs", price: 329.99, rating: 4.0, color: "#1c5177", blurb: "Affordable everyday TV with crisp HD detail." },
+  { id: "p1", name: "Vantage 55\" 4K OLED TV", category: "TVs", searchTerms: ["television"], price: 1299.99, rating: 4.6, color: "#0b1f3a", blurb: "Stunning 4K OLED picture with smart streaming built in." },
+  { id: "p2", name: "Crestline 65\" QLED TV", category: "TVs", searchTerms: ["television"], price: 899.99, rating: 4.3, color: "#123a5c", blurb: "Bright, vivid QLED colors for movie night." },
+  { id: "p3", name: "Aperture 43\" LED TV", category: "TVs", searchTerms: ["television"], price: 329.99, rating: 4.0, color: "#1c5177", blurb: "Affordable everyday TV with crisp HD detail." },
   { id: "p4", name: "Nimbus 14 Ultralight Laptop", category: "Laptops", price: 1099.0, rating: 4.5, color: "#3a2b5c", blurb: "Featherweight laptop with all-day battery life." },
   { id: "p5", name: "Forge 16 Pro Laptop", category: "Laptops", price: 1699.0, rating: 4.7, color: "#4a3474", blurb: "High-performance laptop for creators and gamers." },
   { id: "p6", name: "Meadow 11 Chromebook", category: "Laptops", price: 249.0, rating: 4.1, color: "#5a3f8e", blurb: "Simple, fast, and budget-friendly for everyday tasks." },

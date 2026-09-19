@@ -121,6 +121,13 @@ main {
   margin-bottom: 1rem;
 }
 
+.search-suggestion {
+  color: var(--blue-dark);
+  font-size: 0.9rem;
+  font-weight: 700;
+  margin: -0.5rem 0 1rem;
+}
+
 .product-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
