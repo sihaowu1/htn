@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Product - BestBuy Mock</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="site-header" id="site-header"></header>
+  <nav class="category-nav" id="category-nav"></nav>
+
+  <main id="main-content"></main>
+
+  <footer class="site-footer" id="site-footer"></footer>
+
+  <script src="products.js"></script>
+  <script src="app.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const product = findProduct(params.get("id"));
+    const main = document.getElementById("main-content");
+
+    if (!product) {
+      renderHeader("All");
+      main.innerHTML = `<div class="empty-state">Product not found. <a href="index.html">Back to store</a></div>`;
+    } else {
+      renderHeader(product.category);
+
+      main.innerHTML = `
+        <div class="breadcrumb">
+          <a href="index.html">Home</a> /
+          <a href="index.html?category=${encodeURIComponent(product.category)}">${product.category}</a> /
+          ${product.name}
+        </div>
+        <div class="product-detail">
+          <div>${productThumbHtml(product)}</div>
+          <div>
+            <h1>${product.name}</h1>
+            <div class="product-rating">★ ${product.rating.toFixed(1)} rating</div>
+            <p>${product.blurb}</p>
+            <div class="product-price" id="unit-price">${formatPrice(product.price)}</div>
+
+            <div class="qty-row">
+              <label for="qty">Qty</label>
+              <input type="number" id="qty" value="1" min="1" max="10" />
+              <button class="btn" id="add-to-cart-btn">Add to Cart</button>
+            </div>
+            <div id="add-confirmation" style="display:none; color: #1a7a1a; font-weight:600;">Added to cart.</div>
+
+            <a class="btn secondary" href="cart.html" style="margin-top:1rem; display:inline-block;">View Cart</a>
+          </div>
+        </div>
+      `;
+
+      document.getElementById("add-to-cart-btn").addEventListener("click", () => {
+        const qtyInput = document.getElementById("qty");
+        let qty = parseInt(qtyInput.value, 10);
+        if (!Number.isFinite(qty) || qty < 1) qty = 1;
+        addToCart(product.id, qty);
+        document.getElementById("cart-count").textContent = cartCount();
+        const conf = document.getElementById("add-confirmation");
+        conf.style.display = "block";
+      });
+    }
+  </script>
+</body>
+</html>
