@@ -21,6 +21,9 @@ export async function settle(page: Page) {
   await page.waitForLoadState('domcontentloaded');
   await page.waitForLoadState('networkidle', { timeout: 1500 }).catch(() => undefined);
 }
+export function pageLiveViewUrl(pages: Array<{ url: string; debuggerFullscreenUrl: string }>, pageUrl: string) {
+  return pages.find(candidate => candidate.url === pageUrl)?.debuggerFullscreenUrl || '';
+}
 export async function perform(page: Page, action: Action, trace: Trace, signal: AbortSignal) {
   signal.throwIfAborted();
   await trace.span('browser.action', async () => {
@@ -63,8 +66,9 @@ export class BrowserSession {
       const browser = await chromium.connectOverCDP(session.connectUrl, { timeout: 30_000 });
       const info: SessionInfo = { agentId: trace.identity.agentId, role: trace.identity.role, sessionId: session.id, liveUrl: '', status: 'running' };
       const owned = new BrowserSession(sdk, browser, info, trace, publish);
-      try { info.liveUrl = (await sdk.sessions.debug(session.id)).debuggerFullscreenUrl; }
-      catch (error) { await trace.event('session.live_view.failed', { error: String(error) }); }
+      // Do not publish the session-level debugger URL here. At creation time it
+      // targets Browserbase's initial about:blank tab; page() publishes the URL
+      // for the page after navigation instead.
       publish(info);
       return owned;
     } catch (error) {
@@ -100,39 +104,46 @@ export class BrowserSession {
     page.on('dialog', async dialog => { record('browser.dialog', { type: dialog.type(), message: dialog.message() }); await dialog.dismiss().catch(() => undefined); });
     page.on('popup', popup => { record('browser.unsupported', { reason: 'Popup closed; multi-tab flows are unsupported' }); void popup.close(); });
     try {
+      let pageLiveUrl = '';
       await this.trace.event('navigation.attempt', { url: startUrl });
       await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
       await settle(page);
       // Use the live view for the actual page created in this context. The
       // session-level URL can point at Browserbase's default about:blank tab.
       let liveViewError: unknown;
-      let sessionLiveUrl = '';
-      for (let attempt = 0; attempt < 4 && !this.info.liveUrl; attempt++) {
+      for (let attempt = 0; attempt < 4; attempt++) {
         try {
           const debug = await this.sdk.sessions.debug(this.info.sessionId);
-          sessionLiveUrl = debug.debuggerFullscreenUrl;
-          const pageLiveUrl = debug.pages.find(p => p.url === page.url())?.debuggerFullscreenUrl;
+          pageLiveUrl = pageLiveViewUrl(debug.pages, page.url());
           if (pageLiveUrl) {
             this.info.liveUrl = pageLiveUrl;
             this.publish(this.info);
+            break;
           } else if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500));
         } catch (error) {
           liveViewError = error;
           if (attempt < 3) await new Promise(resolve => setTimeout(resolve, 500));
         }
       }
-      if (!this.info.liveUrl && sessionLiveUrl) {
-        this.info.liveUrl = sessionLiveUrl;
-        this.publish(this.info);
-      }
       if (!this.info.liveUrl && liveViewError) {
         await this.trace.event('session.live_view.failed', { error: String(liveViewError) });
       }
-      return { page, dispose: async () => { await context.close(); this.contexts.delete(context); } };
+      return { page, dispose: async () => {
+        // A page-specific Browserbase debugger URL becomes invalid as soon as
+        // its context closes. Remove the iframe first so it never displays a
+        // stale "debugging connection was closed" page between crawler leases.
+        if (pageLiveUrl && this.info.liveUrl === pageLiveUrl) {
+          this.info.liveUrl = '';
+          this.publish(this.info);
+        }
+        await context.close(); this.contexts.delete(context);
+      } };
     } catch (error) { await context.close(); this.contexts.delete(context); throw error; }
   }
   close() {
     return this.closePromise ??= (async () => {
+      this.info.liveUrl = '';
+      this.publish(this.info);
       await Promise.allSettled([...this.contexts].map(c => c.close()));
       try {
         await this.sdk.sessions.update(this.info.sessionId, { projectId: process.env.BROWSERBASE_PROJECT_ID!, status: 'REQUEST_RELEASE' });
