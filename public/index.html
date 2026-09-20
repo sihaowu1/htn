@@ -17,7 +17,6 @@
       <button data-view="runs" class="active" aria-current="page"><span class="nav-icon">◫</span> Runs <span class="notif" hidden></span><span class="nav-arrow">↗</span></button>
       <button data-view="overview"><span class="nav-icon">◎</span> Overview <span class="notif" hidden></span></button>
       <button data-view="investigate"><span class="nav-icon">⌘</span> Investigate <span class="notif" hidden></span></button>
-      <button data-view="events"><span class="nav-icon">⌁</span> Events <span class="notif" hidden></span></button>
       <button data-view="browsers"><span class="nav-icon">▦</span> Browsers <span class="notif" hidden></span></button>
     </nav>
     <div class="sidebar-bottom"><span class="blue-dot"></span> A little oversight.<br><span>A lot of peace of mind.</span></div>
@@ -39,7 +38,19 @@
     </section>
     <section id="view-investigate" class="view" aria-label="Failure investigation">
       <div id="investigation-summary"><p class="empty-copy">Choose a failed run to inspect its evidence.</p></div>
-      <div class="investigation-grid"><div><div class="section-bar"><h2>Agent timeline</h2><span class="quiet-label">SELECT AN EVENT TO CROSS-HIGHLIGHT</span></div><div id="timeline" class="timeline"></div></div><div><div class="section-bar"><h2>Causal graph</h2><span class="quiet-label">SOLID LINES ARE EXPLICIT LINKS</span></div><svg id="causal-graph" class="causal-graph" role="img" aria-label="Event dependency graph"></svg></div></div>
+      <div class="section-bar"><h2>Agent flow</h2><div class="flow-stats" id="flow-stats"><span class="quiet-label">SELECT AN EVENT TO OPEN EVIDENCE</span></div></div>
+      <div class="flow-container" id="flow-container" aria-label="Agent step flow">
+        <div class="flow-axis" id="flow-axis"></div>
+        <div class="flow-lanes" id="flow-lanes"></div>
+        <svg class="flow-edges" id="flow-edges" role="img" aria-label="Causal links"></svg>
+      </div>
+      <div class="section-bar"><h2>Event log</h2><div class="event-log-count" id="event-log-count"><span class="quiet-label">ALL SUB-AGENT EVENTS</span></div></div>
+      <div class="event-log-toolbar">
+        <div class="agent-pills" id="agent-pills"><button type="button" class="agent-pill active" data-agent="all">All</button></div>
+        <input id="event-log-search" type="search" placeholder="Search event type or metadata">
+      </div>
+      <div class="event-log-wrap"><table class="event-log"><thead><tr><th class="col-time">Time</th><th class="col-agent">Agent</th><th class="col-type">Event</th><th class="col-detail">Detail</th><th class="col-status">Status</th><th class="col-seq">Seq</th></tr></thead><tbody id="event-log-body"></tbody></table></div>
+      <div class="pager"><button id="event-log-prev" type="button">Previous</button><span id="event-log-page">0 events</span><button id="event-log-next" type="button">Next</button></div>
     </section>
     <section id="view-browsers" class="view" aria-label="Browser monitors">
       <div class="section-bar"><h2><span class="blue-dot"></span> Browser feeds <span id="feed-count">00</span></h2><span class="quiet-label">ISOLATED SESSIONS · READ ONLY</span></div>
@@ -57,9 +68,9 @@
       <div class="discovery-panels"><details><summary>Flow tree & coverage <span>↗</span></summary><pre id="tree">No discovery yet</pre></details><details><summary>Plan & skipped branches <span>↗</span></summary><pre id="plan">No plan yet</pre></details></div>
       <a id="download" hidden>Download flow map ↗</a>
     </section>
-    <section id="view-events" class="view" aria-label="Event log"><div class="section-bar"><h2>Evidence explorer</h2><a id="export-events" hidden>Export JSON ↗</a></div><div class="event-toolbar"><input id="event-search" type="search" placeholder="Search event type or metadata"><input id="event-type" placeholder="Exact event type"><input id="event-agent" placeholder="Exact agent ID"><button id="event-filter" type="button">Apply</button></div><div class="event-table-wrap"><table class="event-table"><thead><tr><th>Time</th><th>Agent</th><th>Event</th><th>Sequence</th></tr></thead><tbody id="events"></tbody></table></div><div class="pager"><button id="events-prev">Previous</button><span id="events-page">0 events</span><button id="events-next">Next</button></div></section>
+
     <aside id="evidence-drawer" class="evidence-drawer" hidden aria-label="Event evidence"><button id="close-drawer" class="drawer-close" aria-label="Close evidence">×</button><div id="evidence-content"></div></aside>
-    <form id="form" class="task-console">
+    <form id="form" class="task-console" hidden>
       <div class="console-heading"><span class="eyebrow">MISSION CONTROL</span><span class="quiet-label">What are we testing today?</span></div>
       <div class="task-inputs"><label>Target website<input id="url" type="url" required placeholder="https://your-tunnel.example"></label><label class="task-field">Task<textarea id="prompt" required placeholder="Test search with matching and no-result queries. Stop at the results."></textarea></label></div>
       <div class="console-bottom"><label class="worker-control"><span>Maximum simultaneous workers</span><input id="workers" type="number" min="1" max="5" value="2" required></label><details class="advanced"><summary>Run options</summary><div><label>Flow map<input id="mapFile" type="file" accept=".json,application/json"></label><label class="checkbox-label"><input id="singleAction" type="checkbox"> Test single action <small>Initial page only; skips discovery</small></label></div></details><div class="run-actions"><button id="stop" type="button" disabled>Stop</button><button id="start" type="submit">Start run <span>↗</span></button></div></div>
