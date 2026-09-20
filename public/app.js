@@ -3,6 +3,7 @@ import { eventKey, eventOffsetSeconds, eventsForSession, isPlaybackEvent,
 
 const $ = id => document.getElementById(id);
 let current, stream, graph = { nodes: [], edges: [] }, selectedEvent;
+window.__setTestGraph = g => { graph = g; renderFlow(); };
 let eventLogOffset = 0, eventLogPageSize = 50, eventLogFilter = 'all';
 const seen = new Set(), cards = new Map();
 const eventRows = new Map(), replays = new Map();
@@ -27,23 +28,194 @@ function extractDetail(type, data = {}) {
 }
 function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString(); } catch { return iso; } }
 const headings = { runs:['Run intelligence','Find a run, understand its outcome, and follow the evidence.'], overview:['Run overview','A consistent summary of agents, signals, coverage, and decisions.'], investigate:['Failure investigation','Follow the causal path from assumptions to effects.'], browsers:['Control Room','A front-row seat to every browser path and action.'] };
-function showView(name) { for (const b of $('nav').querySelectorAll('button')) { const active = b.dataset.view === name; b.classList.toggle('active', active); active ? b.setAttribute('aria-current','page') : b.removeAttribute('aria-current'); } for (const view of document.querySelectorAll('.view')) view.classList.toggle('active', view.id === `view-${name}`); $('view-name').textContent = name[0].toUpperCase()+name.slice(1); $('page-title').replaceChildren(document.createTextNode(headings[name][0]), Object.assign(document.createElement('span'), {textContent:'.'})); $('page-description').textContent = headings[name][1]; $('form').hidden = name !== 'browsers'; }
+function showView(name) {
+  for (const b of $('nav').querySelectorAll('button')) {
+    const active = b.dataset.view === name;
+    b.classList.toggle('active', active);
+    active ? b.setAttribute('aria-current','page') : b.removeAttribute('aria-current');
+  }
+  for (const view of document.querySelectorAll('.view'))
+    view.classList.toggle('active', view.id === `view-${name}`);
+  $('view-name').textContent = name[0].toUpperCase()+name.slice(1);
+  $('page-title').replaceChildren(document.createTextNode(headings[name][0]), Object.assign(document.createElement('span'), {textContent:'.'}));
+  $('page-description').textContent = headings[name][1];
+  $('form').hidden = name !== 'browsers';
+  if (name === 'investigate' && graph.nodes.length) {
+    requestAnimationFrame(() => renderFlow());
+  }
+}
 $('nav').addEventListener('click', event => { const button = event.target.closest('button[data-view]'); if (button) showView(button.dataset.view); });
 
 async function loadRuns() { const params = new URLSearchParams({limit:'100'}); if ($('run-search').value) params.set('search',$('run-search').value); if ($('run-status').value) params.set('status',$('run-status').value); if ($('failure-category').value) params.set('failureCategory',$('failure-category').value); try { const [data,metrics] = await Promise.all([request(`/api/runs?${params}`),request('/api/dashboard/metrics')]); renderGlobalMetrics(data.items,metrics); renderRunList(data.items); } catch (error) { $('error').textContent = error.message; } }
 function renderGlobalMetrics(runs,daily) { const successful=runs.filter(r=>r.status==='succeeded').length, failures=runs.reduce((s,r)=>s+Number(r.failure_count||0),0), backlog=runs.reduce((s,r)=>s+Number(r.investigation_backlog||0),0), recovery=runs.filter(r=>r.investigation_outcome==='RECOVERED_FAILURE').length; $('global-metrics').innerHTML=[["Runs",runs.length,'in current result'],['Success rate',runs.length?`${Math.round(successful/runs.length*100)}%`:'—',`${successful} succeeded`],['Failure clusters',failures,`${recovery} recovered`],['Investigation backlog',backlog,'queued or running']].map(([l,v,n])=>`<article class="metric"><span>${l}</span><strong>${v}</strong><small>${n}</small></article>`).join(''); const grouped=new Map(); for(const row of daily){const day=String(row.day).slice(0,10), entry=grouped.get(day)||{total:0,failed:0}; entry.total+=Number(row.runs); if(String(row.status).includes('fail'))entry.failed+=Number(row.runs); grouped.set(day,entry);} const max=Math.max(1,...[...grouped.values()].map(v=>v.total)); $('outcome-chart').innerHTML=[...grouped.entries()].slice(-14).map(([day,v])=>`<div class="bar-column" title="${day}: ${v.total} runs, ${v.failed} failed"><div class="bar failure" style="height:${v.failed/max*100}%"></div><div class="bar success" style="height:${(v.total-v.failed)/max*100}%"></div><span>${day.slice(5)}</span></div>`).join('')||'<p class="empty-copy">No historical metrics yet.</p>'; }
 function renderRunList(runs) { $('run-list').innerHTML=runs.map(run=>`<button class="run-row ${String(run.status).includes('fail')?'has-failure':''}" data-run="${run.run_id}"><span class="run-health"></span><span class="run-main"><strong>${escapeHtml(run.goal)}</strong><small>${run.run_id} · ${escapeHtml(run.workflow_type||'workflow')}</small></span><span><small>Status</small><strong>${escapeHtml(run.status)}</strong></span><span><small>Duration</small><strong>${fmtDuration(run.duration_ms)}</strong></span><span><small>Agents / events</small><strong>${run.agent_count||0} / ${run.event_count||0}</strong></span><span><small>Failures</small><strong>${run.failure_count||0}</strong></span><span><small>Cause</small><strong>${escapeHtml(run.failure_category||'—')}</strong></span></button>`).join('')||'<p class="empty-copy">No runs match these filters.</p>'; }
 $('run-list').addEventListener('click',e=>{const row=e.target.closest('[data-run]');if(row)void selectRun(row.dataset.run);});
-async function selectRun(id) { current=id; localStorage.setItem('lastRun',id); $('error').textContent=''; try { const [summary,runGraph]=await Promise.all([request(`/api/runs/${id}/summary`),request(`/api/runs/${id}/graph`)]); graph=runGraph; renderSummary(summary); renderInvestigations(summary.investigations||[]); renderFlow(); renderEventLog(true); $('status').textContent=String(summary.status).replaceAll('_',' '); document.body.dataset.phase=summary.status; showView(Number(summary.metrics?.failures||0)>0?'investigate':'overview'); if(['starting','discovering','planning','running','observing'].includes(summary.status))connect(id); } catch(error){$('error').textContent=error.message;} }
+async function selectRun(id) {
+  current=id; localStorage.setItem('lastRun',id); $('error').textContent='';
+  try {
+    const [summary,runGraph]=await Promise.all([request(`/api/runs/${id}/summary`),request(`/api/runs/${id}/graph`)]);
+    graph=runGraph;
+    renderSummary(summary);
+    renderInvestigations(summary.investigations||[]);
+    $('status').textContent=String(summary.status).replaceAll('_',' ');
+    document.body.dataset.phase=summary.status;
+    showView(Number(summary.metrics?.failures||0)>0?'investigate':'overview');
+    renderFlow();
+    renderEventLog(true);
+    if(['starting','discovering','planning','running','observing'].includes(summary.status))connect(id);
+  } catch(error){$('error').textContent=error.message;}
+}
 function renderSummary(s) { const m=s.metrics||{}; const subAgents=filterSubAgents(s.agents); $('run-summary').innerHTML=`<div class="run-title"><div><span class="eyebrow">${escapeHtml(s.workflow_type)}</span><h2>${escapeHtml(s.goal)}</h2><code>${s.run_id}</code></div><span class="outcome ${String(s.status).includes('fail')?'bad':''}">${escapeHtml(s.status)}</span></div><div class="metric-grid compact">${[['Duration',fmtDuration(s.completed_at?new Date(s.completed_at)-new Date(s.created_at):null)],['Agents',subAgents.length],['Events',m.events||0],['Failures',m.failures||0],['Model calls',m.model_calls||0],['Tool calls',m.tool_calls||0],['Retries',m.retries||0],['p95 latency',m.latency_p95_ms?`${Math.round(m.latency_p95_ms)}ms`:'—']].map(([k,v])=>`<div class="metric"><span>${k}</span><strong>${v}</strong></div>`).join('')}</div><div class="stage-strip">${['discovery','planning','execution','observation','completion'].map(stage=>`<span class="${graph.nodes.some(n=>n.type==='workflow.stage.completed'&&n.metadata?.stage===stage)?'done':''}">${stage}</span>`).join('')}</div>`; $('agent-cards').innerHTML=subAgents.map(a=>`<article class="agent-card"><span>${escapeHtml(a.agent_id)}</span><strong>${escapeHtml(a.assigned_task||'coordination')}</strong><dl><dt>Outcome</dt><dd>${escapeHtml(a.outcome||'—')}</dd><dt>Events</dt><dd>${a.event_count}</dd><dt>Retries</dt><dd>${a.retry_count}</dd><dt>Last signal</dt><dd>${escapeHtml(a.last_event||'—')}</dd></dl></article>`).join('')||'<p class="empty-copy">No sub-agent executions recorded for this run.</p>'; const decisions=filterSubAgents(graph.nodes.filter(n=>n.type==='decision.recorded'||n.type==='decision.revised')); $('decisions').innerHTML=decisions.map(n=>`<button data-event="${n.id}" class="decision"><span>${escapeHtml(n.agent_id)}</span><strong>${escapeHtml(n.metadata.decision)}</strong><small>${(n.metadata.assumptions||[]).length?escapeHtml(n.metadata.assumptions.join(' · ')):'Unsupported: no assumptions or evidence recorded'}</small></button>`).join('')||'<p class="empty-copy">No explicit decision summaries were recorded for this run.</p>'; }
 function renderInvestigations(items) { const reports=items.filter(i=>i.report).map(i=>i.report); $('investigation-summary').innerHTML=reports.map(r=>`<article class="failure-report"><header><div><span class="outcome bad">${escapeHtml(r.outcome)}</span><h2>${escapeHtml(r.title||r.summary||r.observed_failure||'Observer finding')}</h2></div><span class="confidence">${escapeHtml(r.likely_cause?.confidence||'—')} confidence</span></header><h3>Observed facts</h3><ol>${r.observed_facts.map(f=>`<li>${escapeHtml(f.statement)} ${f.event_ids.map(id=>`<button class="citation" data-event="${id}">${id.slice(0,8)}</button>`).join(' ')}</li>`).join('')}</ol>${r.likely_cause?`<h3>Likely cause · ${escapeHtml(r.likely_cause.category)}</h3><p>${escapeHtml(r.likely_cause.explanation)}</p>`:''}<h3>Evidence gaps and alternatives</h3><ul>${r.evidence_gaps_and_alternatives.map(g=>`<li>${escapeHtml(g)}</li>`).join('')||'<li>None recorded.</li>'}</ul>${r.reproduction_step?`<h3>Reproduction step</h3><p>${escapeHtml(r.reproduction_step)}</p>`:''}<details><summary>Raw report JSON</summary><pre>${escapeHtml(JSON.stringify(r,null,2))}</pre></details></article>`).join('')||'<p class="empty-copy">No completed investigation report yet. Failure clusters remain visible in the agent flow.</p>'; }
 function sortAgentLanes(a,b){const order={orchestrator:0,observer:2};const ao=order[a]??1,bo=order[b]??1;if(ao!==bo)return ao-bo;if(a.startsWith('worker-')&&b.startsWith('worker-'))return Number(a.slice(7))-Number(b.slice(7));return a.localeCompare(b);}
-function renderFlow(){const container=$('flow-container'),lanesEl=$('flow-lanes'),axisEl=$('flow-axis'),edgesEl=$('flow-edges'),statsEl=$('flow-stats');const nodes=filterSubAgents(graph.nodes);if(!nodes.length){lanesEl.innerHTML=axisEl.innerHTML=edgesEl.innerHTML='';statsEl.innerHTML='<span class="quiet-label">NO SUB-AGENT EVENTS</span>';return;}const laneNames=[...new Set(nodes.map(n=>n.agent_id))].sort(sortAgentLanes);const times=nodes.map(n=>new Date(n.occurred_at).getTime());const min=Math.min(...times),max=Math.max(...times, min+1);const durationMs=max-min;const pxPerMs=Math.max(0.25, Math.min(2, 8000 / Math.max(durationMs, 1000)));const axisPadding=16,nodeWidth=122,laneWidth=Math.max(nodeWidth+28,160),totalWidth=Math.max(container.clientWidth-30,laneNames.length*laneWidth+axisPadding+20);const totalHeight=Math.max(280, durationMs*pxPerMs+120);const byId=new Map(nodes.map(n=>[n.id,n]));
-statsEl.innerHTML=`<span><strong>${nodes.length}</strong><em>events</em></span><span><strong>${nodes.filter(n=>isFailure(n.type,n.metadata)).length}</strong><em>failures</em></span><span><strong>${laneNames.length}</strong><em>agents</em></span><span><strong>${fmtDuration(durationMs)}</strong><em>duration</em></span><span class="quiet-label">SELECT AN EVENT TO OPEN EVIDENCE</span>`;
-axisEl.innerHTML='';const ticks=Math.max(4,Math.floor(totalWidth/120));for(let i=0;i<=ticks;i++){const t=min+(max-min)*(i/ticks);const left=axisPadding+(t-min)*pxPerMs;const mark=document.createElement('mark');mark.style.left=`${left}px`;const label=document.createElement('label');label.textContent=fmtTime(new Date(t));mark.append(label);axisEl.append(mark);}
-lanesEl.style.width=`${totalWidth}px`;lanesEl.style.height=`${totalHeight}px`;lanesEl.innerHTML=laneNames.map(name=>`<div class="flow-lane" data-agent="${escapeHtml(name)}"><div class="flow-lane-label">${escapeHtml(name)}</div><div class="flow-nodes" data-agent="${escapeHtml(name)}"></div></div>`).join('');
-for(const n of nodes){const lane=document.querySelector(`.flow-nodes[data-agent="${CSS.escape(n.agent_id)}"]`);if(!lane)continue;const top=40+(new Date(n.occurred_at).getTime()-min)*pxPerMs;const left=axisPadding;const status=eventStatus(n.type,n.metadata);const detail=extractDetail(n.type,n.metadata);const btn=document.createElement('button');btn.type='button';btn.className=`flow-node ${status==='failure'?'failure':''} ${selectedEvent===n.id?'selected':''}`;btn.dataset.event=n.id;btn.dataset.status=status;btn.style.top=`${top}px`;btn.style.left=`${left}px`;btn.title=`${escapeHtml(n.type)}\n${detail ? escapeHtml(detail) + '\n' : ''}${fmtTime(n.occurred_at)} · seq ${n.sequence_number}`;btn.innerHTML=`<span class="node-type"><span class="status-dot"></span>${escapeHtml(n.type)}</span>${detail?`<span class="node-detail">${escapeHtml(detail)}</span>`:''}<span class="node-time">${fmtTime(n.occurred_at)}</span>`;lane.append(btn);}
-edgesEl.style.width=`${totalWidth}px`;edgesEl.style.height=`${totalHeight}px`;edgesEl.innerHTML='';for(const e of graph.edges){const a=byId.get(e.source),b=byId.get(e.target);if(!a||!b)continue;const x1=axisPadding+nodeWidth/2,y1=40+(new Date(a.occurred_at).getTime()-min)*pxPerMs+10;const x2=axisPadding+nodeWidth/2,y2=40+(new Date(b.occurred_at).getTime()-min)*pxPerMs+10;const path=document.createElementNS('http://www.w3.org/2000/svg','path');const c1=(x1+x2)/2+40,c2=(x1+x2)/2-40;path.setAttribute('d',`M ${x1} ${y1} C ${c1} ${y1} ${c2} ${y2} ${x2} ${y2}`);path.setAttribute('class',`flow-edge ${e.inferred?'inferred':''}`);edgesEl.append(path);}}
+function renderFlow() {
+  const container = $('flow-container'), lanesEl = $('flow-lanes'), axisEl = $('flow-axis'), edgesEl = $('flow-edges'), statsEl = $('flow-stats');
+  const nodes = filterSubAgents(graph.nodes);
+  if (!nodes.length) {
+    lanesEl.innerHTML = axisEl.innerHTML = edgesEl.innerHTML = '';
+    statsEl.innerHTML = '<span class="quiet-label">NO SUB-AGENT EVENTS</span>';
+    return;
+  }
+  const laneNames = [...new Set(nodes.map(n => n.agent_id))].sort(sortAgentLanes);
+  const times = nodes.map(n => new Date(n.occurred_at).getTime());
+  const min = Math.min(...times), max = Math.max(...times, min + 1);
+  const durationMs = max - min;
+  const pxPerMs = Math.max(0.25, Math.min(2, 8000 / Math.max(durationMs, 1000)));
+  const axisPadding = 16, nodeWidth = 122, laneWidth = Math.max(nodeWidth + 28, 160);
+  const totalWidth = Math.max(container.clientWidth - 30, laneNames.length * laneWidth + axisPadding + 20);
+  let totalHeight = Math.max(280, durationMs * pxPerMs + 120);
+
+  statsEl.innerHTML = `<span><strong>${nodes.length}</strong><em>events</em></span><span><strong>${nodes.filter(n => isFailure(n.type, n.metadata)).length}</strong><em>failures</em></span><span><strong>${laneNames.length}</strong><em>agents</em></span><span><strong>${fmtDuration(durationMs)}</strong><em>duration</em></span><span class="quiet-label">SELECT AN EVENT TO OPEN EVIDENCE</span>`;
+
+  axisEl.innerHTML = '';
+  const ticks = Math.max(4, Math.floor(totalWidth / 120));
+  for (let i = 0; i <= ticks; i++) {
+    const t = min + (max - min) * (i / ticks);
+    const left = axisPadding + (t - min) * pxPerMs;
+    const mark = document.createElement('mark');
+    mark.style.left = `${left}px`;
+    const label = document.createElement('label');
+    label.textContent = fmtTime(new Date(t));
+    mark.append(label);
+    axisEl.append(mark);
+  }
+
+  lanesEl.style.width = `${totalWidth}px`;
+  lanesEl.style.height = `${totalHeight}px`;
+  lanesEl.innerHTML = laneNames.map(name =>
+    `<div class="flow-lane" data-agent="${escapeHtml(name)}"><div class="flow-lane-label">${escapeHtml(name)}</div><div class="flow-nodes" data-agent="${escapeHtml(name)}"></div></div>`
+  ).join('');
+
+  const nodesByLane = new Map();
+  for (const name of laneNames) nodesByLane.set(name, []);
+  for (const n of nodes) {
+    if (!nodesByLane.has(n.agent_id)) nodesByLane.set(n.agent_id, []);
+    nodesByLane.get(n.agent_id).push(n);
+  }
+
+  let maxBottom = 0;
+  const nodeButtons = new Map();
+
+  for (const [agentId, laneNodes] of nodesByLane.entries()) {
+    const lane = lanesEl.querySelector(`.flow-nodes[data-agent="${CSS.escape(agentId)}"]`);
+    if (!lane) continue;
+    laneNodes.sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
+
+    let lastBottom = 16;
+    for (const n of laneNodes) {
+      const naturalTop = 24 + (new Date(n.occurred_at).getTime() - min) * pxPerMs;
+      const top = Math.max(naturalTop, lastBottom + 16);
+      const status = eventStatus(n.type, n.metadata);
+      const detail = extractDetail(n.type, n.metadata);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = `flow-node ${status === 'failure' ? 'failure' : ''} ${selectedEvent === n.id ? 'selected' : ''}`;
+      btn.dataset.event = n.id;
+      btn.dataset.status = status;
+      btn.style.top = `${Math.round(top)}px`;
+      btn.style.left = `${axisPadding}px`;
+      btn.title = `${escapeHtml(n.type)}\n${detail ? escapeHtml(detail) + '\n' : ''}${fmtTime(n.occurred_at)} · seq ${n.sequence_number}`;
+      btn.innerHTML = `<span class="node-type"><span class="status-dot"></span>${escapeHtml(n.type)}</span>${detail ? `<span class="node-detail">${escapeHtml(detail)}</span>` : ''}<span class="node-time">${fmtTime(n.occurred_at)}</span>`;
+      lane.append(btn);
+      nodeButtons.set(n.id, btn);
+
+      const estimatedHeight = detail ? 56 : 42;
+      const cardHeight = btn.offsetHeight || estimatedHeight;
+      lastBottom = top + cardHeight;
+      if (lastBottom > maxBottom) maxBottom = lastBottom;
+    }
+  }
+
+  if (maxBottom + 60 > totalHeight) {
+    totalHeight = maxBottom + 60;
+    lanesEl.style.height = `${totalHeight}px`;
+  }
+  edgesEl.style.width = `${totalWidth}px`;
+  edgesEl.style.height = `${totalHeight + 40}px`;
+
+  const edgesRect = edgesEl.getBoundingClientRect();
+  const nodePositions = new Map();
+  const isVisible = edgesRect.width > 0;
+  const laneIndexMap = new Map(laneNames.map((name, idx) => [name, idx]));
+  const computedLaneWidth = totalWidth / laneNames.length;
+
+  for (const n of nodes) {
+    const btn = nodeButtons.get(n.id);
+    if (!btn) continue;
+    if (isVisible) {
+      const btnRect = btn.getBoundingClientRect();
+      nodePositions.set(n.id, {
+        x: btnRect.left - edgesRect.left + btnRect.width / 2,
+        top: btnRect.top - edgesRect.top,
+        bottom: btnRect.bottom - edgesRect.top
+      });
+    } else {
+      const laneIdx = laneIndexMap.get(n.agent_id) ?? 0;
+      const x = laneIdx * computedLaneWidth + axisPadding + nodeWidth / 2;
+      const btnTop = parseFloat(btn.style.top) || 0;
+      const yTop = 76 + btnTop;
+      const detail = extractDetail(n.type, n.metadata);
+      const h = detail ? 56 : 42;
+      nodePositions.set(n.id, { x, top: yTop, bottom: yTop + h });
+    }
+  }
+
+  edgesEl.innerHTML = '';
+  for (const e of graph.edges) {
+    const posA = nodePositions.get(e.source);
+    const posB = nodePositions.get(e.target);
+    if (!posA || !posB) continue;
+
+    let x1, y1, x2, y2;
+    if (posA.top <= posB.top) {
+      x1 = posA.x; y1 = posA.bottom;
+      x2 = posB.x; y2 = posB.top;
+    } else {
+      x1 = posA.x; y1 = posA.top;
+      x2 = posB.x; y2 = posB.bottom;
+    }
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    let d;
+    if (Math.abs(x1 - x2) < 4) {
+      d = `M ${x1} ${y1} L ${x2} ${y2}`;
+    } else {
+      const dy = Math.max(24, Math.abs(y2 - y1));
+      const cy1 = y1 <= y2 ? y1 + dy * 0.5 : y1 - dy * 0.5;
+      const cy2 = y1 <= y2 ? y2 - dy * 0.5 : y2 + dy * 0.5;
+      d = `M ${x1} ${y1} C ${x1} ${cy1} ${x2} ${cy2} ${x2} ${y2}`;
+    }
+    const isHighlighted = selectedEvent && (e.source === selectedEvent || e.target === selectedEvent);
+    path.setAttribute('d', d);
+    path.setAttribute('class', `flow-edge ${e.inferred ? 'inferred' : ''} ${isHighlighted ? 'highlighted' : ''}`);
+    edgesEl.append(path);
+  }
+}
+window.addEventListener('resize', debounce(() => {
+  if (graph.nodes?.length && $('view-investigate')?.classList.contains('active')) {
+    renderFlow();
+  }
+}, 150));
 async function renderEventLog(reset=false){if(!current)return;if(reset)eventLogOffset=0;const search=$('event-log-search').value.trim();const params=new URLSearchParams({limit:String(eventLogPageSize),offset:String(eventLogOffset)});if(search)params.set('search',search);try{const data=await request(`/api/runs/${current}/events?${params}`);let items=data.items||[];items=filterSubAgents(items.map(e=>({...e,agent_id:e.agent_id})));if(eventLogFilter!=='all')items=items.filter(e=>e.agent_id===eventLogFilter);const agents=[...new Set(filterSubAgents(graph.nodes).map(n=>n.agent_id))].sort(sortAgentLanes);const pillsEl=$('agent-pills');pillsEl.innerHTML=`<button type="button" class="agent-pill ${eventLogFilter==='all'?'active':''}" data-agent="all">All</button>`+agents.map(a=>`<button type="button" class="agent-pill ${eventLogFilter===a?'active':''} agent-badge ${agentRoleClass(a)}" data-agent="${escapeHtml(a)}">${escapeHtml(a)}<span class="pill-count">${graph.nodes.filter(n=>n.agent_id===a).length}</span></button>`).join('');
 $('event-log-body').innerHTML=items.map(e=>{const status=eventStatus(e.event_type,e.metadata);const detail=extractDetail(e.event_type,e.metadata);const highlights=e.search_highlights?.length?`<small class="search-highlights">${escapeHtml(e.search_highlights.join(' · '))}</small>`:'';return `<tr data-event="${e.event_id}" class="${selectedEvent===e.event_id?'selected':''}"><td class="col-time">${fmtTime(e.occurred_at)}</td><td class="col-agent"><span class="agent-badge ${agentRoleClass(e.agent_id)}">${escapeHtml(e.agent_id)}</span></td><td class="col-type"><span class="event-kind ${status}">${escapeHtml(e.event_type)}</span>${highlights}</td><td class="col-detail">${detail?escapeHtml(detail):'—'}</td><td class="col-status"><span class="status-badge ${status}">${status}</span></td><td class="col-seq">${e.sequence_number}</td></tr>`;}).join('')||'<tr><td colspan="6"><p class="empty-copy">No sub-agent events match this filter.</p></td></tr>';
 $('event-log-page').textContent=`${items.length?eventLogOffset+1:0}–${eventLogOffset+items.length} shown`;$('event-log-prev').disabled=eventLogOffset===0;$('event-log-next').disabled=items.length<eventLogPageSize;}catch(error){$('error').textContent=error.message;}}
