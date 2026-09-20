@@ -92,3 +92,22 @@ function getCartItemPrice(product, variant) {
   }
   return basePrice;
 }
+
+function isIpad(productOrId) {
+  if (!productOrId) return false;
+  if (typeof productOrId === "string") {
+    if (["p17", "p18", "p19"].includes(productOrId)) return true;
+    const p = findProduct(productOrId);
+    return p ? isIpad(p) : false;
+  }
+  const name = (productOrId.name || "").toLowerCase();
+  const category = (productOrId.category || "").toLowerCase();
+  const searchTerms = (productOrId.searchTerms || []).map((t) => t.toLowerCase());
+  return (
+    name.includes("ipad") ||
+    name.includes("aeropad") ||
+    category === "tablets" ||
+    searchTerms.includes("ipad") ||
+    ["p17", "p18", "p19"].includes(productOrId.id)
+  );
+}

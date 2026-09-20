@@ -1,26 +1,30 @@
 import React, { useState } from 'react';
-import { findProduct, findVariant, getCartItemKey, formatPrice } from '../products.js';
+import { findProduct, findVariant, getCartItemKey, formatPrice, isIpad } from '../products.js';
 import { useCart } from '../context/CartContext.jsx';
 import { ProductThumb } from '../components/ProductCard.jsx';
+import { NotFoundPage } from './NotFoundPage.jsx';
 
 export function ProductDetailPage({ params }) {
   const productId = params.get("id");
   const product = findProduct(productId);
   const { addToCart } = useCart();
 
-  const [selectedVariant, setSelectedVariant] = useState(() => (product ? findVariant(product) : null));
-  const [qty, setQty] = useState(1);
-  const [showConfirmation, setShowConfirmation] = useState(false);
-
-  if (!product) {
+  if (!product || isIpad(product)) {
     return (
-      <main id="main-content">
-        <div className="empty-state">
-          Product not found. <a href="index.html">Back to store</a>
-        </div>
-      </main>
+      <NotFoundPage
+        title="404 - Product Not Found"
+        message={
+          isIpad(product)
+            ? "We're sorry, this iPad product could not be found (404 Not Found). This product may have been discontinued or removed."
+            : "Product not found. The item you requested does not exist."
+        }
+      />
     );
   }
+
+  const [selectedVariant, setSelectedVariant] = useState(() => findVariant(product));
+  const [qty, setQty] = useState(1);
+  const [showConfirmation, setShowConfirmation] = useState(false);
 
   const handleAddToCart = () => {
     const inputVal = document.getElementById("qty")?.value;

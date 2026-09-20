@@ -9,6 +9,7 @@ import { ProductDetailPage } from './pages/ProductDetailPage.jsx';
 import { CartPage } from './pages/CartPage.jsx';
 import { CheckoutPage } from './pages/CheckoutPage.jsx';
 import { AuthPage } from './pages/AuthPage.jsx';
+import { NotFoundPage } from './pages/NotFoundPage.jsx';
 import {
   PRODUCTS,
   CATEGORIES,
@@ -25,6 +26,7 @@ function getRoute(pathname) {
   if (p.endsWith('cart.html')) return 'cart';
   if (p.endsWith('checkout.html')) return 'checkout';
   if (p.endsWith('auth.html')) return 'auth';
+  if (p.endsWith('404.html')) return '404';
   return 'home';
 }
 
@@ -64,6 +66,7 @@ export function App() {
         {route === 'cart' && <CartPage />}
         {route === 'checkout' && <CheckoutPage />}
         {route === 'auth' && <AuthPage params={params} />}
+        {route === '404' && <NotFoundPage />}
         <SiteFooter />
       </CartProvider>
     </AuthProvider>
