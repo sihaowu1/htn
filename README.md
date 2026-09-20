@@ -47,12 +47,12 @@ Know what your agents actually did.
 | Layer | Technologies |
 |-------|-------------|
 | Runtime | Node.js 22+, TypeScript |
-| Backend | Express, server-sent event stream |
-| Frontend | Plain HTML, CSS, and JavaScript |
+| Backend | Express, PostgreSQL, optional Elastic Cloud, server-sent event stream |
+| Frontend | Plain HTML, CSS, JavaScript, hls.js |
 | Discovery browser | Local Playwright Chromium |
 | Worker browsers | Browserbase cloud sessions, driven via Playwright and CDP |
 | AI models | OpenAI (Responses API for discovery, Chat Completions for workers and observer) |
-| Telemetry | Sentry, serialized local JSONL event log |
+| Telemetry | Sentry, PostgreSQL persistent evidence log, local JSONL events |
 | Tunnel | ngrok, to expose the local target to cloud workers |
 
 ## How It Works
@@ -124,13 +124,17 @@ Fill in the credentials below. Keep `.env` local. Change model settings if neede
 | `OPENAI_API_KEY` | Model access for discovery, planning, workers, and observation | Yes |
 | `BROWSERBASE_API_KEY` | Create isolated cloud browser sessions | Yes |
 | `BROWSERBASE_PROJECT_ID` | Browserbase project for those sessions | Yes |
+| `DATABASE_URL` | PostgreSQL connection string for evidence and investigation persistence | Yes |
 | `SENTRY_DSN` | Error and performance reporting | Yes, for the current run API |
+| `ELASTICSEARCH_ENABLED` | Enable Elastic Cloud search integration (`true`/`false`) | Optional; defaults to `false` |
+| `ELASTICSEARCH_URL` | Elastic Cloud search endpoint | Optional |
+| `ELASTICSEARCH_API_KEY` | Elastic Cloud API key | Optional |
 | `OPENAI_MODEL` | Worker and observer model | Set in `.env.example` |
 | `OPENAI_CRAWLER_MODEL` | Discovery model | Set in `.env.example` |
 | `OPENAI_ORCHESTRATOR_MODEL` | Path-selection model | Set in `.env.example` |
 | `PORT` | Watchtower server port | No; defaults to `3000` |
 
-Although `.env.example` labels Sentry optional, the current server requires `SENTRY_DSN` to start a run. Events are also saved locally in `logs/events.jsonl`.
+Although `.env.example` labels Sentry optional, the current server requires `SENTRY_DSN` to start a run. Events are also saved locally in `logs/events.jsonl` and persisted to PostgreSQL.
 
 ### 3. Serve the target website
 
@@ -153,11 +157,17 @@ Copy the HTTPS forwarding URL. Browserbase runs in the cloud and needs this publ
 
 ### 5. Start Watchtower
 
-From the repository root, in another terminal:
+Start the API and the background investigation observer worker in separate terminals:
 
 ```sh
+# Terminal 1: Watchtower API
 npm run dev
+
+# Terminal 2: Observer & investigation worker
+npm run dev:observer
 ```
+
+Optional Elastic Cloud search can be enabled with `ELASTICSEARCH_ENABLED=true`. After enabling it for an existing database, run `npm run search:backfill` once to build and atomically activate the search indices.
 
 Open **[http://localhost:3000](http://localhost:3000)** and click **Get started**. Keep the target server and tunnel running.
 
@@ -196,6 +206,7 @@ Use run, agent, and Browserbase session IDs to correlate events with browser ses
 ```sh
 npm run build
 npm start
+npm run start:observer
 ```
 
 For architecture, contributor guidance, and test commands, see [AGENTS.md](AGENTS.md).

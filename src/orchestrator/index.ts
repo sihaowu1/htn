@@ -4,7 +4,7 @@ import { randomInt } from 'node:crypto';
 import { config } from '../config.js';
 import { planRelevantTree, validatePlan } from '../flow.js';
 import type { Model } from '../model.js';
-import type { Trace } from '../telemetry.js';
+import type { AgentExecutionContext, Harness } from '../sdk/index.js';
 import type { FlowMap, Plan, Task } from '../types.js';
 import { isAccountCreation } from '../fixture-credentials.js';
 
@@ -107,7 +107,7 @@ async function persistSelection(runId: string, goal: string, candidates: Candida
   return file;
 }
 
-export async function orchestratePaths(map: FlowMap, goal: string, runId: string, model: Model, trace: Trace,
+export async function orchestratePaths(map: FlowMap, goal: string, runId: string, model: Model, harness: Harness, agent: AgentExecutionContext,
   signal: AbortSignal, logRoot = 'logs'): Promise<{ plan: Plan; file: string; reason: string }> {
   signal.throwIfAborted();
   const all = [...describeCandidates(map, goal), ...exploratoryCandidates(map, goal)];
@@ -154,6 +154,6 @@ export async function orchestratePaths(map: FlowMap, goal: string, runId: string
     paths: selected.map(candidate => candidate.task), skipped: [],
   });
   const file = await persistSelection(runId, goal, candidates, selected, reason, logRoot);
-  await trace.event('orchestrator.paths.selected', { candidateCount: candidates.length, selectedPathIds: selected.map(path => path.id), reason, file });
+  await harness.emit_event(agent, { event_type: 'orchestrator.paths.selected', metadata: { candidateCount: candidates.length, selectedPathIds: selected.map(path => path.id), reason, file } });
   return { plan, file, reason };
 }

@@ -55,9 +55,63 @@ export const reportSchema = z.object({
 export type Report = z.infer<typeof reportSchema> & {
   references?: { eventId: number; agentId: string; sessionId: string | null; type: string }[];
 };
-export type Identity = { runId: string; agentId: string; role: 'crawler' | 'orchestrator' | 'worker' | 'observer' | 'system'; sessionId?: string };
-export type LogEvent = Identity & { seq: number; time: string; type: string; data: unknown };
-export type SessionInfo = { agentId: string; role: string; sessionId: string; liveUrl: string; status: string; instruction?: string };
+export const investigationOutcomeSchema = z.enum([
+  'UNRECOVERED_FAILURE', 'RECOVERED_FAILURE', 'NO_FAILURE', 'INSUFFICIENT_EVIDENCE',
+]);
+export const causeCategorySchema = z.enum([
+  'APPLICATION_DEFECT', 'AGENT_MISTAKE', 'STATE_RACE', 'HANDOFF_CORRUPTION', 'EXPECTED_STOP', 'UNKNOWN',
+]);
+export const investigationReportDraftSchema = z.object({
+  summary: z.string().nullable().default(null),
+  title: z.string().nullable().default(null),
+  impact: z.string().nullable().default(null),
+  outcome: investigationOutcomeSchema,
+  observed_failure: z.string().nullable(),
+  earliest_relevant_event_id: z.string().uuid().nullable(),
+  observed_facts: z.array(z.object({
+    statement: z.string().min(1), event_ids: z.array(z.string().uuid()).min(1),
+  })),
+  likely_cause: z.object({
+    category: causeCategorySchema, explanation: z.string().min(1),
+    confidence: z.enum(['LOW', 'MEDIUM', 'HIGH']),
+    supporting_event_ids: z.array(z.string().uuid()),
+  }).nullable(),
+  related_event_ids: z.array(z.string().uuid()),
+  affected_agent_execution_ids: z.array(z.string().uuid()),
+  evidence_gaps_and_alternatives: z.array(z.string()),
+  suggested_next_step: z.string().min(1),
+  reproduction_step: z.string().nullable(),
+  artifact_ids: z.array(z.string().uuid()),
+  trace_ids: z.array(z.string()),
+  recovery_events: z.array(z.string().uuid()).default([]),
+  assumption_event_ids: z.array(z.string().uuid()).default([]),
+  recommended_owner: z.enum(['application', 'agent', 'infrastructure', 'unknown']).default('unknown'),
+});
+export type InvestigationReportDraft = z.infer<typeof investigationReportDraftSchema>;
+export type InvestigationReport = InvestigationReportDraft & {
+  investigation_id: string; run_id: string; trigger_event_id: string; revision: number;
+};
+export const investigationPayloadSchema = z.object({
+  run_id: z.string().uuid(), event_id: z.string().uuid(), goal: z.string(), signal: z.string(),
+});
+export type InvestigationPayload = z.infer<typeof investigationPayloadSchema>;
+export type Identity = {
+  runId: string; agentId: string;
+  role: 'crawler' | 'orchestrator' | 'worker' | 'observer' | 'system';
+  sessionId?: string; agentExecutionId?: string;
+};
+export type LogEvent = Identity & {
+  eventId?: string; seq: number; time: string; type: string; data: unknown;
+};
+export type SessionInfo = {
+  agentId: string; role: string; sessionId: string; liveUrl: string; status: string; instruction?: string;
+};
+export type ReplayPage = {
+  page_id: string; start_time_ms: number; end_time_ms: number; playlist_url: string;
+};
+export type ReplayResponse =
+  | { status: 'available'; session_id: string; pages: ReplayPage[] }
+  | { status: 'pending'; retry_after_ms: number };
 export type Run = {
   id: string; prompt: string; targetUrl: string; maxWorkers: number;
   status: string; sessions: SessionInfo[]; map?: FlowMap; plan?: Plan;

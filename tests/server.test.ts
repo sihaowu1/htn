@@ -8,7 +8,8 @@ test('HTTP server serves bare frontend and validates runs without leaking creden
   const probe = createServer(); await new Promise<void>(resolve => probe.listen(0, '127.0.0.1', resolve));
   const port = (probe.address() as { port: number }).port; await new Promise<void>(resolve => probe.close(() => resolve()));
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/server.ts'], {
-    env: { ...process.env, PORT: String(port), OPENAI_API_KEY: '', BROWSERBASE_API_KEY: '', BROWSERBASE_PROJECT_ID: '', SENTRY_DSN: '' },
+    env: { ...process.env, PORT: String(port), OPENAI_API_KEY: '', BROWSERBASE_API_KEY: '',
+      BROWSERBASE_PROJECT_ID: '', SENTRY_DSN: '', DATABASE_URL: '' },
     windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = ''; child.stdout.on('data', data => { output += data; }); child.stderr.on('data', data => { output += data; });
@@ -30,13 +31,15 @@ test('HTTP server serves bare frontend and validates runs without leaking creden
     assert.match(dashboard, /Control Room/);
     assert.match(dashboard, /TASK ASSIGNMENT/);
     assert.ok(dashboard.indexOf('id="form"') < dashboard.indexOf('id="view-browsers"'));
+    assert.equal((await fetch(origin + '/vendor/hls/hls.min.js')).status, 200);
     const configuration = await (await fetch(origin + '/api/config')).json();
-    assert.deepEqual(configuration.missingCredentials.sort(), ['BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'OPENAI_API_KEY', 'SENTRY_DSN']);
+    assert.deepEqual(configuration.missingCredentials.sort(), ['BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'DATABASE_URL', 'OPENAI_API_KEY', 'SENTRY_DSN']);
     const post = (body: unknown) => fetch(origin + '/api/runs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     assert.equal((await post({ prompt: '', maxWorkers: 1, targetUrl: 'https://example.com' })).status, 400);
     assert.equal((await post({ prompt: 'Search', maxWorkers: 1, targetUrl: 'http://localhost:8080' })).status, 400);
     assert.equal((await post({ prompt: 'Search', maxWorkers: 1, targetUrl: 'https://example.com' })).status, 503);
     assert.equal((await fetch(origin + '/api/runs/unknown')).status, 404);
+    assert.equal((await fetch(origin + '/api/runs/unknown/sessions/unknown/replay')).status, 404);
   } finally {
     child.kill();
     await new Promise<void>(resolve => { if (child.exitCode !== null) resolve(); else child.once('exit', () => resolve()); });

@@ -5,10 +5,14 @@
   "scripts": {
     "setup": "node scripts/setup.mjs",
     "postinstall": "npm run setup",
-    "dev": "tsx src/server.ts",
-    "build": "tsc",
-    "start": "node dist/server.js",
-    "test": "tsx --test tests/core.test.ts tests/model.test.ts tests/crawler.test.ts tests/orchestrator.test.ts tests/node-execution.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts",
+    "dev": "tsx --import ./src/telemetry.ts src/server.ts",
+    "dev:observer": "tsx --import ./src/telemetry.ts src/observer-worker.ts",
+    "build:website": "esbuild local_website/src/main.jsx --bundle --outfile=local_website/app-react.js --format=esm --jsx=automatic --minify",
+    "build": "npm run build:website && tsc",
+    "start": "node --import ./dist/telemetry.js dist/server.js",
+    "start:observer": "node --import ./dist/telemetry.js dist/observer-worker.js",
+    "search:backfill": "tsx src/search-backfill.ts",
+    "test": "tsx --test tests/core.test.ts tests/model.test.ts tests/crawler.test.ts tests/orchestrator.test.ts tests/node-execution.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts tests/sdk.test.ts tests/investigation.test.ts tests/replay.test.ts tests/telemetry.test.ts tests/search.test.ts",
     "test:browser": "tsx --test tests/browser.test.ts"
   },
   "engines": {
@@ -16,17 +20,28 @@
   },
   "dependencies": {
     "@browserbasehq/sdk": "2.20.0",
-    "@sentry/node": "10.75.0",
+    "@browserbasehq/stagehand": "^4.1.0",
+    "@elastic/elasticsearch": "^9.5.1",
+    "@sentry/node": "^10.75.0",
+    "@sentry/profiling-node": "^10.75.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "dotenv": "18.0.1",
     "express": "5.2.1",
+    "hls.js": "^1.7.3",
     "node-html-parser": "^9.0.4",
     "openai": "7.19.0",
+    "pg": "^8.23.0",
     "playwright": "1.63.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
     "@types/express": "5.0.6",
     "@types/node": "22.20.4",
+    "@types/pg": "^8.23.1",
+    "esbuild": "^0.28.2",
     "tsx": "4.23.13",
     "typescript": "5.9.3"
   }

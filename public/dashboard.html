@@ -6,6 +6,8 @@
   <meta name="color-scheme" content="dark">
   <title>Watchtower — Control Room</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/vendor/hls/hls.min.js" defer></script>
+  <script src="/replay-utils.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -14,6 +16,9 @@
     <div class="sidebar-caption">WORKSPACE / 01</div>
     <nav id="nav" aria-label="Workspace">
       <button data-view="browsers" class="active" aria-current="page"><span class="nav-icon">▦</span> Browsers <span class="notif" hidden></span><span class="nav-arrow">↗</span></button>
+      <button data-view="runs"><span class="nav-icon">◫</span> Runs <span class="notif" hidden></span></button>
+      <button data-view="overview"><span class="nav-icon">◎</span> Overview <span class="notif" hidden></span></button>
+      <button data-view="investigate"><span class="nav-icon">⌘</span> Investigate <span class="notif" hidden></span></button>
       <button data-view="observer"><span class="nav-icon">◎</span> Observer <span class="notif" hidden></span></button>
       <button data-view="results"><span class="nav-icon">☷</span> Results <span class="notif" hidden></span></button>
       <button data-view="events"><span class="nav-icon">⌁</span> Events <span class="notif" hidden></span></button>
@@ -45,12 +50,39 @@
       <div class="discovery-panels"><details><summary>Flow tree & coverage <span>↗</span></summary><pre id="tree">No discovery yet</pre></details><details><summary>Plan & skipped branches <span>↗</span></summary><pre id="plan">No plan yet</pre></details></div>
       <a id="download" hidden>Download flow map ↗</a>
     </section>
+    <section id="view-runs" class="view" aria-label="Run index">
+      <div class="metric-grid" id="global-metrics"></div>
+      <div class="dashboard-chart"><div class="section-bar"><h2>Run outcomes</h2><span class="quiet-label">DAILY ACTIVITY</span></div><div id="outcome-chart" class="bar-chart" aria-label="Run outcome chart"></div></div>
+      <div class="run-toolbar"><input id="run-search" type="search" placeholder="Search goal, run, agent, event, or error"><select id="run-status"><option value="">All statuses</option><option>succeeded</option><option>completed_with_failures</option><option>failed</option><option>cancelled</option></select><select id="failure-category"><option value="">All failure categories</option><option>APPLICATION_DEFECT</option><option>AGENT_MISTAKE</option><option>STATE_RACE</option><option>HANDOFF_CORRUPTION</option><option>EXPECTED_STOP</option><option>UNKNOWN</option></select><button id="refresh-runs" type="button">Refresh</button></div>
+      <div id="run-list" class="run-list" aria-live="polite"><p class="empty-copy">Loading runs…</p></div>
+    </section>
+    <section id="view-overview" class="view" aria-label="Run overview">
+      <div id="run-summary" class="summary-shell"><p class="empty-copy">Choose a run from the run index.</p></div>
+      <div class="section-bar"><h2>Agent executions</h2><span class="quiet-label">ASSIGNMENT · OUTCOME · LAST SIGNAL</span></div><div id="agent-cards" class="agent-grid"></div>
+      <div class="section-bar"><h2>Assumptions and decisions</h2><span class="quiet-label">EXPLICIT SUMMARIES · NO HIDDEN REASONING</span></div><div id="decisions" class="decision-list"></div>
+    </section>
+    <section id="view-investigate" class="view" aria-label="Failure investigation">
+      <div id="investigation-summary"><p class="empty-copy">Choose a failed run to inspect its evidence.</p></div>
+      <div class="section-bar"><h2>Agent flow</h2><div class="flow-stats" id="flow-stats"><span class="quiet-label">SELECT AN EVENT TO OPEN EVIDENCE</span></div></div>
+      <div class="flow-container" id="flow-container" aria-label="Agent step flow">
+        <div class="flow-axis" id="flow-axis"></div>
+        <div class="flow-lanes" id="flow-lanes"></div>
+        <svg class="flow-edges" id="flow-edges" role="img" aria-label="Causal links"></svg>
+      </div>
+      <div class="section-bar"><h2>Event log</h2><div class="event-log-count" id="event-log-count"><span class="quiet-label">ALL SUB-AGENT EVENTS</span></div></div>
+      <div class="event-log-toolbar">
+        <div class="agent-pills" id="agent-pills"><button type="button" class="agent-pill active" data-agent="all">All</button></div>
+        <input id="event-log-search" type="search" placeholder="Search event type or metadata">
+      </div>
+      <div class="event-log-wrap"><table class="event-log"><thead><tr><th class="col-time">Time</th><th class="col-agent">Agent</th><th class="col-type">Event</th><th class="col-detail">Detail</th><th class="col-status">Status</th><th class="col-seq">Seq</th></tr></thead><tbody id="event-log-body"></tbody></table></div>
+      <div class="pager"><button id="event-log-prev" type="button">Previous</button><span id="event-log-page">0 events</span><button id="event-log-next" type="button">Next</button></div>
+    </section>
     <section id="view-observer" class="view" aria-label="Observer reports"><div class="section-bar"><h2>Observer findings</h2><span class="quiet-label">OBSERVATIONS & SUPPORTING EVIDENCE</span></div><pre id="findings">No findings yet</pre></section>
     <section id="view-results" class="view" aria-label="Task results"><div class="section-bar"><h2>Task outcomes</h2><span class="quiet-label">RESULTS FROM ASSIGNED PATHS</span></div><pre id="results">No results yet</pre></section>
     <section id="view-events" class="view" aria-label="Event log"><div class="section-bar"><h2>Activity log</h2><span class="quiet-label">LATEST 500 EVENTS</span></div><pre id="events">Events will appear here when a run starts.</pre></section>
 
+    <aside id="evidence-drawer" class="evidence-drawer" hidden aria-label="Event evidence"><button id="close-drawer" class="drawer-close" aria-label="Close evidence">×</button><div id="evidence-content"></div></aside>
     <footer class="page-footer"><span>Watchtower / BROWSER AGENT WORKSPACE</span><span>Every action tells a story.</span></footer>
   </main>
 </body>
 </html>
-

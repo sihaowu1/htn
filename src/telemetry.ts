@@ -1,14 +1,166 @@
-import { mkdir, appendFile, readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import { EventEmitter } from 'node:events';
 import * as Sentry from '@sentry/node';
-import './config.js';
-import type { Identity, LogEvent } from './types.js';
+import { nodeProfilingIntegration } from '@sentry/profiling-node';
+import { config } from './config.js';
 
-Sentry.init({ dsn: process.env.SENTRY_DSN, enabled: !!process.env.SENTRY_DSN,
-  tracesSampleRate: 1, enableLogs: true, sendDefaultPii: false,
-  integrations: [Sentry.openAIIntegration({ recordInputs: false, recordOutputs: false })] });
+try {
+  Sentry.init({
+    dsn: process.env.SENTRY_DSN,
+    enabled: !!process.env.SENTRY_DSN,
+    environment: config.sentryEnvironment,
+    tracesSampleRate: config.sentryTracesSampleRate,
+    profileSessionSampleRate: config.sentryProfileSessionSampleRate,
+    profileLifecycle: 'trace',
+    enableLogs: true,
+    sendDefaultPii: false,
+    integrations: [
+      Sentry.openAIIntegration({ recordInputs: false, recordOutputs: false }),
+      nodeProfilingIntegration(),
+      ...(config.sentryRuntimeMetricsEnabled ? [Sentry.nodeRuntimeMetricsIntegration()] : []),
+    ],
+  });
+} catch { /* Application startup must not depend on Sentry availability. */ }
 export { Sentry };
+
+export async function withSpan<T>(options: Parameters<typeof Sentry.startSpan>[0],
+  callback: () => Promise<T> | T): Promise<T> {
+  let invoked = false;
+  let completed = false;
+  let failed = false;
+  let value: T;
+  let operationError: unknown;
+  const invoke = async () => {
+    invoked = true;
+    try {
+      value = await callback();
+      completed = true;
+      return value;
+    } catch (error) {
+      failed = true;
+      operationError = error;
+      throw error;
+    }
+  };
+  try {
+    return await Sentry.startSpan(options, invoke);
+  } catch (error) {
+    if (failed) throw operationError;
+    if (completed) return value!;
+    if (!invoked) return callback();
+    throw error;
+  }
+}
+
+export async function closeTelemetry(timeoutMs: number): Promise<void> {
+  try { await Sentry.close(timeoutMs); } catch { /* Best-effort shutdown flush. */ }
+}
+
+export type MetricRecord = {
+  kind: 'count' | 'distribution';
+  name: string;
+  value: number;
+  unit?: string;
+  attributes: Record<string, string>;
+};
+
+type MetricEvent = { event_type: string; metadata: Record<string, unknown> };
+
+function finiteNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function tokenCounts(usage: unknown): Array<{ direction: 'input' | 'output'; value: number }> {
+  if (!usage || typeof usage !== 'object') return [];
+  const item = usage as Record<string, unknown>;
+  const input = finiteNumber(item.input_tokens ?? item.prompt_tokens);
+  const output = finiteNumber(item.output_tokens ?? item.completion_tokens);
+  return [
+    ...(input === undefined ? [] : [{ direction: 'input' as const, value: input }]),
+    ...(output === undefined ? [] : [{ direction: 'output' as const, value: output }]),
+  ];
+}
+
+export function metricsForModelCall(model: string, api: string, outcome: 'succeeded' | 'failed',
+  durationMs: number, usage?: unknown): MetricRecord[] {
+  const attributes = { model, api, outcome };
+  return [
+    { kind: 'count', name: 'htn.model.calls', value: 1, attributes },
+    { kind: 'distribution', name: 'htn.model.duration', value: durationMs,
+      unit: 'millisecond', attributes },
+    ...tokenCounts(usage).map(tokens => ({ kind: 'count' as const, name: 'htn.model.tokens',
+      value: tokens.value, unit: 'token', attributes: { model, api, direction: tokens.direction } })),
+  ];
+}
+
+/** Pure mapping kept separate so its cardinality rules are directly testable. */
+export function metricsForEvent(event: MetricEvent, role: string): MetricRecord[] {
+  const metadata = event.metadata;
+  const records: MetricRecord[] = [{
+    kind: 'count', name: 'htn.harness.events', value: 1,
+    attributes: { event_type: event.event_type, agent_role: role },
+  }];
+  if (event.event_type === 'agent.completed') {
+    records.push({ kind: 'count', name: 'htn.agent.executions', value: 1,
+      attributes: { agent_role: role, outcome: String(metadata.outcome ?? 'unknown') } });
+  }
+  if (event.event_type === 'worker.failed') {
+    records.push({ kind: 'count', name: 'htn.agent.executions', value: 1,
+      attributes: { agent_role: role, outcome: 'failed' } });
+  }
+  if ((event.event_type === 'run.finished' || event.event_type === 'run.failed') && role === 'system') {
+    records.push({ kind: 'count', name: 'htn.agent.executions', value: 1,
+      attributes: { agent_role: role, outcome: String(metadata.status ??
+        (event.event_type === 'run.failed' ? 'failed' : 'completed')) } });
+  }
+  if ((role === 'crawler' || role === 'orchestrator')
+    && (event.event_type === 'tool.completed' || event.event_type === 'tool.failed')) {
+    records.push({ kind: 'count', name: 'htn.agent.executions', value: 1,
+      attributes: { agent_role: role, outcome: event.event_type === 'tool.completed' ? 'succeeded' : 'failed' } });
+  }
+  if (event.event_type === 'tool.completed' || event.event_type === 'tool.failed') {
+    const attributes = { tool: String(metadata.name ?? 'unknown'),
+      outcome: event.event_type === 'tool.completed' ? 'succeeded' : 'failed' };
+    records.push({ kind: 'count', name: 'htn.tool.calls', value: 1, attributes });
+    const duration = finiteNumber(metadata.duration_ms);
+    if (duration !== undefined) records.push({ kind: 'distribution', name: 'htn.tool.duration',
+      value: duration, unit: 'millisecond', attributes });
+  }
+  if (event.event_type === 'model.response' || event.event_type === 'model.failed') {
+    const duration = finiteNumber(metadata.duration_ms);
+    records.push(...metricsForModelCall(String(metadata.model ?? 'unknown'), String(metadata.api ?? 'unknown'),
+      event.event_type === 'model.response' ? 'succeeded' : 'failed', duration ?? 0, metadata.usage));
+  }
+  if (event.event_type === 'artifact.created') {
+    const bytes = finiteNumber(metadata.size_bytes);
+    if (bytes !== undefined) records.push({ kind: 'distribution', name: 'htn.artifact.bytes',
+      value: bytes, unit: 'byte', attributes: { artifact_kind: String(metadata.kind ?? 'unknown') } });
+  }
+  return records;
+}
+
+type MetricSink = Pick<typeof Sentry.metrics, 'count' | 'distribution'>;
+
+export function emitMetric(record: MetricRecord, sink: MetricSink = Sentry.metrics): void {
+  try {
+    const options = { attributes: record.attributes, ...(record.unit ? { unit: record.unit } : {}) };
+    if (record.kind === 'count') sink.count(record.name, record.value, options);
+    else sink.distribution(record.name, record.value, options);
+  } catch { /* Telemetry must never affect evidence or agent execution. */ }
+}
+
+export function emitMetrics(records: MetricRecord[]): void {
+  for (const record of records) emitMetric(record);
+}
+
+export function activeTraceContext(): { trace_id?: string; span_id?: string; parent_span_id?: string } {
+  try {
+    const span = Sentry.getActiveSpan();
+    if (!span) return {};
+    const json = Sentry.spanToJSON(span);
+    return { trace_id: json.trace_id, span_id: json.span_id,
+      ...(json.parent_span_id ? { parent_span_id: json.parent_span_id } : {}) };
+  } catch { return {}; }
+}
 
 const secretKeys = /^(authorization|cookie|password|token|apiKey|connectUrl|liveUrl)$/i;
 export function redact(value: unknown): unknown {
@@ -23,57 +175,4 @@ export function redact(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redact);
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, val]) => [key, secretKeys.test(key) ? '[redacted]' : redact(val)]));
   return value;
-}
-export class EventLog extends EventEmitter {
-  private seq = 0;
-  private tail: Promise<unknown> = Promise.resolve();
-  constructor(public file = 'logs/events.jsonl', private sink: boolean | ((event: LogEvent) => void) = true) { super(); }
-  async init() {
-    await mkdir(dirname(this.file), { recursive: true });
-    const events = await this.read();
-    this.seq = events.reduce((max, e) => Math.max(max, e.seq), 0);
-    const existing = await readFile(this.file, 'utf8').catch(() => '');
-    if (existing && !existing.endsWith('\n')) await appendFile(this.file, '\n');
-  }
-  write(identity: Identity, type: string, data: unknown = {}): Promise<LogEvent> {
-    const operation = this.tail.then(async () => {
-      const event = { ...identity, seq: ++this.seq, time: new Date().toISOString(), type, data: redact(data) };
-      await appendFile(this.file, JSON.stringify(event) + '\n');
-      if (this.sink) {
-        try {
-          if (typeof this.sink === 'function') this.sink(event);
-          else Sentry.withScope(scope => {
-            scope.setTags({ runId: identity.runId, agentId: identity.agentId, role: identity.role, sessionId: identity.sessionId || 'none' });
-            Sentry.logger.info(type, { ...identity, seq: event.seq, payload: JSON.stringify(event.data) });
-            if (/error|failed|failure/.test(type)) Sentry.captureException(new Error(type), { extra: { event } });
-          });
-        } catch { /* Local persistence does not depend on Sentry availability. */ }
-      }
-      this.emit('event', event);
-      return event;
-    });
-    this.tail = operation.catch(() => undefined);
-    return operation;
-  }
-  async read(runId?: string): Promise<LogEvent[]> {
-    await this.tail;
-    let text: string;
-    try { text = await readFile(this.file, 'utf8'); } catch (e: any) { if (e.code === 'ENOENT') return []; throw e; }
-    return text.split('\n').filter(Boolean).flatMap(line => {
-      try { const event = JSON.parse(line) as LogEvent; return !runId || event.runId === runId ? [event] : []; }
-      catch { return []; } // A partial last line from a crash must not hide earlier events.
-    });
-  }
-  async flush() { await this.tail; }
-}
-export class Trace {
-  constructor(public log: EventLog, public identity: Identity) {}
-  event(type: string, data: unknown = {}) { return this.log.write(this.identity, type, data); }
-  async span<T>(name: string, work: () => Promise<T>): Promise<T> {
-    return Sentry.startSpan({ name, op: name === 'model.call' ? 'gen_ai.request' : 'agent', attributes: { ...this.identity } }, async () => {
-      await this.event(`${name}.started`);
-      try { const result = await work(); await this.event(`${name}.succeeded`); return result; }
-      catch (error) { await this.event(`${name}.failed`, { error: String(error) }); throw error; }
-    });
-  }
 }
