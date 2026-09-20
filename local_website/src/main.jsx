@@ -9,6 +9,7 @@ import {
   getCartItemKey,
   parseCartItemKey,
   formatPrice,
+  getCartItemPrice,
 } from './products.js';
 
 // Expose legacy helpers on window for backwards compatibility with any automation/tests
@@ -67,7 +68,7 @@ if (typeof window !== 'undefined') {
     const cart = window.getCart();
     return Object.entries(cart).reduce((sum, [key, qty]) => {
       const item = parseCartItemKey(key) || { product: findProduct(key), variant: null };
-      const price = item.variant?.price || item.product?.price;
+      const price = getCartItemPrice(item.product, item.variant);
       return price ? sum + price * qty : sum;
     }, 0);
   };

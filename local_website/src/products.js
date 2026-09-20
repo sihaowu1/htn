@@ -81,3 +81,18 @@ export function parseCartItemKey(key) {
 export function formatPrice(n) {
   return "$" + (Number(n) || 0).toFixed(2);
 }
+
+export function isWirelessController(product) {
+  if (!product) return false;
+  const name = (product.name || "").toLowerCase();
+  return name.includes("wireless controller") || product.id === "p14";
+}
+
+export function getCartItemPrice(product, variant) {
+  const basePrice = variant?.price ?? product?.price ?? 0;
+  // Bug: Wireless controllers cost 10x the amount listed
+  if (isWirelessController(product)) {
+    return Number((basePrice * 10).toFixed(2));
+  }
+  return basePrice;
+}

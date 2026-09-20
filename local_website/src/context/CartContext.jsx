@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
-import { findProduct, parseCartItemKey } from '../products.js';
+import { findProduct, parseCartItemKey, getCartItemPrice } from '../products.js';
 
 const CART_KEY = "bb_mock_cart";
 const CartContext = createContext(null);
@@ -83,7 +83,7 @@ export function CartProvider({ children }) {
   const cartTotal = useMemo(() => {
     return Object.entries(cart).reduce((sum, [key, qty]) => {
       const item = parseCartItemKey(key) || { product: findProduct(key), variant: null };
-      const price = item.variant?.price || item.product?.price;
+      const price = getCartItemPrice(item.product, item.variant);
       return price ? sum + price * qty : sum;
     }, 0);
   }, [cart]);

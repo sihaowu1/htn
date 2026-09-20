@@ -1,5 +1,5 @@
 import React from 'react';
-import { parseCartItemKey, findProduct, formatPrice } from '../products.js';
+import { parseCartItemKey, findProduct, formatPrice, getCartItemPrice } from '../products.js';
 import { useCart } from '../context/CartContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 import { ProductThumb } from '../components/ProductCard.jsx';
@@ -28,7 +28,7 @@ export function CartPage() {
                 const item = parseCartItemKey(key) || { product: findProduct(key), variant: null };
                 const p = item.product;
                 const variant = item.variant;
-                const price = variant?.price || p.price;
+                const price = getCartItemPrice(p, variant);
 
                 return (
                   <div className="cart-item" key={key} data-testid={`cart-item-${key}`}>
