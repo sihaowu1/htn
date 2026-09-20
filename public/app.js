@@ -787,6 +787,13 @@ request('/api/config').then(c => {
   $('workers').max = c.maxWorkers;
   $('workers').value = Math.min(Number($('workers').value) || 2, c.maxWorkers);
   $('workers').readOnly = false;
+  if (c.demoMode) {
+    const label = document.querySelector('.console-heading .quiet-label');
+    if (label) {
+      label.textContent = c.instrumentation === 'watchtower' ? 'SDK: CONNECTED' : 'SDK: LOCAL ONLY';
+      label.classList.add(c.instrumentation === 'watchtower' ? 'sdk-connected' : 'sdk-local');
+    }
+  }
   if (c.missingCredentials.length) $('error').textContent = `Configure .env and restart: ${c.missingCredentials.join(', ')}`;
 }).catch(e => { $('error').textContent = e.message; });
 const previous = localStorage.getItem('lastRun');

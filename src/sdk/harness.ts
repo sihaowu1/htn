@@ -74,8 +74,10 @@ export function metadataByteSize(metadata: unknown): number {
 
 export class Harness {
   readonly maxMetadataBytes: number;
-  constructor(readonly adapter: StoreAdapter, options?: { maxMetadataBytes?: number }) {
+  readonly telemetryEnabled: boolean;
+  constructor(readonly adapter: StoreAdapter, options?: { maxMetadataBytes?: number; telemetryEnabled?: boolean }) {
     this.maxMetadataBytes = options?.maxMetadataBytes ?? DEFAULT_MAX_METADATA_BYTES;
+    this.telemetryEnabled = options?.telemetryEnabled ?? true;
   }
 
   async start_run(raw: StartRunInput): Promise<RunContext> {
@@ -124,11 +126,12 @@ export class Harness {
     try {
       await this.adapter.storeEvent(event);
     } catch (error) {
-      emitMetric({ kind: 'distribution', name: 'htn.harness.persist.duration',
+      if (this.telemetryEnabled) emitMetric({ kind: 'distribution', name: 'htn.harness.persist.duration',
         value: performance.now() - begun, unit: 'millisecond',
         attributes: { agent_role: roleForAgent(agentCtx.agent_id), outcome: 'failed' } });
       throw error;
     }
+    if (!this.telemetryEnabled) return event;
     try {
       emitMetric({ kind: 'distribution', name: 'htn.harness.persist.duration',
         value: performance.now() - begun, unit: 'millisecond',
@@ -246,7 +249,7 @@ export class Harness {
     const artifact_id = await this.adapter.storeArtifactContent({ runId: agentCtx.run_id,
       agentExecutionId: agentCtx.agent_execution_id, kind: input.kind,
       mimeType: input.mimeType ?? 'application/json', content });
-    emitMetric({ kind: 'distribution', name: 'htn.artifact.bytes', value: content.byteLength,
+    if (this.telemetryEnabled) emitMetric({ kind: 'distribution', name: 'htn.artifact.bytes', value: content.byteLength,
       unit: 'byte', attributes: { artifact_kind: input.kind } });
     return { artifact_id, size_bytes: content.byteLength };
   }

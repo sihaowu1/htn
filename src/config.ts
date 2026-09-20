@@ -62,6 +62,7 @@ export const config = {
     process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE, defaults.profileSessionSampleRate),
   sentryRuntimeMetricsEnabled: parseBoolean('SENTRY_RUNTIME_METRICS_ENABLED',
     process.env.SENTRY_RUNTIME_METRICS_ENABLED, true),
+  demoMode: parseBoolean('WATCHTOWER_DEMO_MODE', process.env.WATCHTOWER_DEMO_MODE, false),
   browserbaseReplayEnabled: parseBoolean('BROWSERBASE_REPLAY_ENABLED',
     process.env.BROWSERBASE_REPLAY_ENABLED, true),
 };

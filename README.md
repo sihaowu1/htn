@@ -171,6 +171,36 @@ Optional Elastic Cloud search can be enabled with `ELASTICSEARCH_ENABLED=true`. 
 
 Open **[http://localhost:3000](http://localhost:3000)** and click **Get started**. Keep the target server and tunnel running.
 
+### Pitch demo: integrate the SDK live
+
+Run the isolated demo environment instead of the normal API:
+
+```sh
+npm run dev:demo
+```
+
+The existing **Start run** button still launches the real crawler, orchestrator,
+workers, and Browserbase sessions, but evidence remains in memory and Sentry
+export is disabled. The production `npm run dev` path is unchanged.
+
+For the live SDK integration, open `src/demo/start-run.ts`, change the type-only
+SDK import to a runtime import:
+
+```ts
+import { Harness, type StoreAdapter } from '../sdk/index.js';
+```
+
+Then replace the local runtime at the Start Run boundary:
+
+```ts
+return new Harness(watchtowerStore);
+```
+
+Restart `npm run dev:demo` and click **Start run** again. The same UI action now
+persists the run and emits correlated Sentry metrics, traces, logs, profiles, and
+Browserbase session IDs. Keep the completed version in a backup branch or patch
+so the demo does not depend on live typing.
+
 ## Your First Run
 
 1. Paste the HTTPS tunnel URL into **Target website** under **Task Assignment**.

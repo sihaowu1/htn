@@ -12,6 +12,7 @@ import { Runner } from './runner.js';
 import { ReplayNotFoundError, ReplayProviderError, ReplayService } from './replay.js';
 import type { Run } from './types.js';
 import { createSearchService } from './search.js';
+import { createDemoHarness } from './demo/start-run.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -28,15 +29,23 @@ if (store instanceof PgAdapter) await store.init();
 const database = store instanceof PgAdapter ? store : undefined;
 const search = createSearchService();
 await search.initialize().catch(error => console.error('Elasticsearch search unavailable; using PostgreSQL fallback', error));
-const harness = new Harness(store);
-const replay = new ReplayService(async (runId, sessionId) =>
-  (await store.readEvents(runId)).some(event => event.sessionId === sessionId));
+// Normal mode is unchanged. Demo mode deliberately starts with a local,
+// non-exporting harness; src/demo/start-run.ts is the live SDK integration seam.
+const harness = config.demoMode ? createDemoHarness(store) : new Harness(store);
+const runStore = harness.adapter;
+const replay = new ReplayService(async (runId, sessionId) => {
+  const source = 'readEvents' in runStore ? runStore as MemoryAdapter | PgAdapter : store;
+  return (await source.readEvents(runId)).some(event => event.sessionId === sessionId);
+});
 const clients = new Map<string, Set<express.Response>>();
 function send(runId: string, name: string, payload: unknown) {
   for (const res of clients.get(runId) || []) res.write(`event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 const runner = new Runner(harness, (run: Run) => send(run.id, 'run', run));
 store.on('event', (event: LegacyEvent) => send(event.runId, 'log', event));
+if (runStore !== store && runStore instanceof MemoryAdapter) {
+  runStore.on('event', (event: LegacyEvent) => send(event.runId, 'log', event));
+}
 let investigationListener: PoolClient | undefined;
 if (database) {
   const listener = await database.pool.connect();
@@ -49,7 +58,9 @@ if (database) {
     if (latest?.report?.run_id) send(latest.report.run_id, 'investigation', latest.report);
   });
 }
-app.get('/api/config', (_req, res) => res.json({ maxWorkers: config.maxWorkers, missingCredentials: missingCredentials() }));
+app.get('/api/config', (_req, res) => res.json({ maxWorkers: config.maxWorkers,
+  missingCredentials: missingCredentials(), demoMode: config.demoMode,
+  instrumentation: config.demoMode && runStore !== store ? 'local-only' : 'watchtower' }));
 const pageSchema = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50),
   offset: z.coerce.number().int().nonnegative().default(0) });
 app.get('/api/dashboard/metrics', async (_req, res) => {
@@ -197,7 +208,8 @@ app.get('/api/runs/:id/stream', async (req, res) => {
   if (run) res.write(`event: run\ndata: ${JSON.stringify(run)}\n\n`);
   // Subscribe before replay. The client de-duplicates by event ID, with an
   // execution-plus-sequence fallback for legacy rows, to cover the overlap.
-  for (const event of await store.readEvents(runId)) res.write(`event: log\ndata: ${JSON.stringify(event)}\n\n`);
+  const eventSource = runStore instanceof MemoryAdapter || runStore instanceof PgAdapter ? runStore : store;
+  for (const event of await eventSource.readEvents(runId)) res.write(`event: log\ndata: ${JSON.stringify(event)}\n\n`);
   const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 15_000);
   req.on('close', () => { clearInterval(heartbeat); set.delete(res); });
 });

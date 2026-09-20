@@ -6,6 +6,7 @@
     "setup": "node scripts/setup.mjs",
     "postinstall": "npm run setup",
     "dev": "tsx --import ./src/telemetry.ts src/server.ts",
+    "dev:demo": "WATCHTOWER_DEMO_MODE=true tsx --import ./src/telemetry.ts src/server.ts",
     "dev:observer": "tsx --import ./src/telemetry.ts src/observer-worker.ts",
     "build:website": "esbuild local_website/src/main.jsx --bundle --outfile=local_website/app-react.js --format=esm --jsx=automatic --minify",
     "build": "npm run build:website && tsc",

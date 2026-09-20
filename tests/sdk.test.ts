@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { createDemoHarness } from '../src/demo/start-run.js';
 import {
   AgentExecutionContext,
   Harness,
+  MemoryAdapter,
   MetadataTooLargeError,
   PgAdapter,
   RunContext,
@@ -219,6 +221,14 @@ test('contexts are independent objects usable without the harness', () => {
   assert.equal(agent.nextSequence(), 2);
   agent.setSessionId('ext-1');
   assert.equal(agent.getSessionId(), 'ext-1');
+});
+
+test('demo starts local-only until the SDK boundary is connected', () => {
+  const watchtowerStore = new MemoryAdapter();
+  const demo = createDemoHarness(watchtowerStore);
+  assert.equal(demo.telemetryEnabled, false);
+  assert.notEqual(demo.adapter, watchtowerStore);
+  assert.ok(demo.adapter instanceof MemoryAdapter);
 });
 
 const pgEnabled = !!process.env.DATABASE_URL;
