@@ -335,27 +335,28 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
     }
     values.push(input.limit, input.offset);
     const filter = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const result = await this.db.query(`SELECT r.*,
-      COUNT(DISTINCT a.agent_execution_id)::int AS agent_count,
-      COUNT(DISTINCT e.event_id)::int AS event_count,
-      COUNT(DISTINCT e.event_id) FILTER (WHERE e.event_type = 'model.request')::int AS model_call_count,
-      COUNT(DISTINCT e.event_id) FILTER (WHERE e.event_type = 'tool.started')::int AS tool_call_count,
-      COUNT(DISTINCT e.event_id) FILTER (WHERE e.event_type LIKE 'retry.%')::int AS retry_count,
-      COUNT(DISTINCT ar.artifact_id)::int AS artifact_count,
-      COUNT(DISTINCT ic.cluster_id)::int AS failure_count,
-      COUNT(DISTINCT ij.job_id) FILTER (WHERE ij.status IN ('queued','running'))::int AS investigation_backlog,
+    const result = await this.db.query(`WITH matched_runs AS (
+      SELECT r.*, COUNT(*) OVER()::int AS total_count
+      FROM runs r
+      ${filter}
+      ORDER BY r.created_at DESC
+      LIMIT $${values.length - 1} OFFSET $${values.length}
+    )
+    SELECT r.*,
+      (SELECT COUNT(*) FROM agent_executions WHERE run_id = r.run_id)::int AS agent_count,
+      (SELECT COUNT(*) FROM events WHERE run_id = r.run_id)::int AS event_count,
+      (SELECT COUNT(*) FROM events WHERE run_id = r.run_id AND event_type = 'model.request')::int AS model_call_count,
+      (SELECT COUNT(*) FROM events WHERE run_id = r.run_id AND event_type = 'tool.started')::int AS tool_call_count,
+      (SELECT COUNT(*) FROM events WHERE run_id = r.run_id AND event_type LIKE 'retry.%')::int AS retry_count,
+      (SELECT COUNT(*) FROM artifacts WHERE run_id = r.run_id)::int AS artifact_count,
+      (SELECT COUNT(*) FROM incident_clusters WHERE run_id = r.run_id)::int AS failure_count,
+      (SELECT COUNT(*) FROM investigation_jobs WHERE run_id = r.run_id AND status IN ('queued','running'))::int AS investigation_backlog,
       EXTRACT(EPOCH FROM (COALESCE(r.completed_at, clock_timestamp()) - r.created_at)) * 1000 AS duration_ms,
-      (ARRAY_AGG(ir.outcome ORDER BY ir.created_at DESC) FILTER (WHERE ir.outcome IS NOT NULL))[1] AS investigation_outcome,
-      (ARRAY_AGG(ir.report->'likely_cause'->>'category' ORDER BY ir.created_at DESC)
-        FILTER (WHERE ir.report->'likely_cause'->>'category' IS NOT NULL))[1] AS failure_category,
-      (ARRAY_AGG(ir.report->'likely_cause'->>'confidence' ORDER BY ir.created_at DESC)
-        FILTER (WHERE ir.report->'likely_cause'->>'confidence' IS NOT NULL))[1] AS confidence,
-      COUNT(*) OVER()::int AS total_count
-      FROM runs r LEFT JOIN agent_executions a USING (run_id) LEFT JOIN events e USING (agent_execution_id)
-      LEFT JOIN artifacts ar ON ar.run_id = r.run_id LEFT JOIN incident_clusters ic ON ic.run_id = r.run_id
-      LEFT JOIN investigation_jobs ij ON ij.run_id = r.run_id LEFT JOIN investigation_reports ir ON ir.run_id = r.run_id
-      ${filter} GROUP BY r.run_id ORDER BY r.created_at DESC
-      LIMIT $${values.length - 1} OFFSET $${values.length}`, values);
+      (SELECT outcome FROM investigation_reports WHERE run_id = r.run_id AND outcome IS NOT NULL ORDER BY created_at DESC LIMIT 1) AS investigation_outcome,
+      (SELECT report->'likely_cause'->>'category' FROM investigation_reports WHERE run_id = r.run_id AND report->'likely_cause'->>'category' IS NOT NULL ORDER BY created_at DESC LIMIT 1) AS failure_category,
+      (SELECT report->'likely_cause'->>'confidence' FROM investigation_reports WHERE run_id = r.run_id AND report->'likely_cause'->>'confidence' IS NOT NULL ORDER BY created_at DESC LIMIT 1) AS confidence
+    FROM matched_runs r
+    ORDER BY r.created_at DESC`, values);
     return { items: result.rows, total: Number(result.rows[0]?.total_count || 0), limit: input.limit, offset: input.offset };
   }
 

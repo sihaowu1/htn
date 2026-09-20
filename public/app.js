@@ -51,9 +51,36 @@ function showView(name) {
 }
 $('nav').addEventListener('click', event => { const button = event.target.closest('button[data-view]'); if (button) showView(button.dataset.view); });
 
-async function loadRuns() { const params = new URLSearchParams({limit:'100'}); if ($('run-search').value) params.set('search',$('run-search').value); if ($('run-status').value) params.set('status',$('run-status').value); if ($('failure-category').value) params.set('failureCategory',$('failure-category').value); try { const [data,metrics] = await Promise.all([request(`/api/runs?${params}`),request('/api/dashboard/metrics')]); renderGlobalMetrics(data.items,metrics); renderRunList(data.items); } catch (error) { $('error').textContent = error.message; } }
+async function loadRuns() {
+  const isSearch = Boolean($('run-search').value.trim() || $('run-status').value || $('failure-category').value);
+  const limit = isSearch ? '50' : '10';
+  const params = new URLSearchParams({ limit });
+  if ($('run-search').value.trim()) params.set('search', $('run-search').value.trim());
+  if ($('run-status').value) params.set('status', $('run-status').value);
+  if ($('failure-category').value) params.set('failureCategory', $('failure-category').value);
+  try {
+    const [data, metrics] = await Promise.all([request(`/api/runs?${params}`), request('/api/dashboard/metrics')]);
+    renderGlobalMetrics(data.items, metrics);
+    renderRunList(data.items, isSearch);
+  } catch (error) {
+    $('error').textContent = error.message;
+  }
+}
 function renderGlobalMetrics(runs,daily) { const successful=runs.filter(r=>r.status==='succeeded').length, failures=runs.reduce((s,r)=>s+Number(r.failure_count||0),0), backlog=runs.reduce((s,r)=>s+Number(r.investigation_backlog||0),0), recovery=runs.filter(r=>r.investigation_outcome==='RECOVERED_FAILURE').length; $('global-metrics').innerHTML=[["Runs",runs.length,'in current result'],['Success rate',runs.length?`${Math.round(successful/runs.length*100)}%`:'—',`${successful} succeeded`],['Failure clusters',failures,`${recovery} recovered`],['Investigation backlog',backlog,'queued or running']].map(([l,v,n])=>`<article class="metric"><span>${l}</span><strong>${v}</strong><small>${n}</small></article>`).join(''); const grouped=new Map(); for(const row of daily){const day=String(row.day).slice(0,10), entry=grouped.get(day)||{total:0,failed:0}; entry.total+=Number(row.runs); if(String(row.status).includes('fail'))entry.failed+=Number(row.runs); grouped.set(day,entry);} const max=Math.max(1,...[...grouped.values()].map(v=>v.total)); $('outcome-chart').innerHTML=[...grouped.entries()].slice(-14).map(([day,v])=>`<div class="bar-column" title="${day}: ${v.total} runs, ${v.failed} failed"><div class="bar failure" style="height:${v.failed/max*100}%"></div><div class="bar success" style="height:${(v.total-v.failed)/max*100}%"></div><span>${day.slice(5)}</span></div>`).join('')||'<p class="empty-copy">No historical metrics yet.</p>'; }
-function renderRunList(runs) { $('run-list').innerHTML=runs.map(run=>`<button class="run-row ${String(run.status).includes('fail')?'has-failure':''}" data-run="${run.run_id}"><span class="run-health"></span><span class="run-main"><strong>${escapeHtml(run.goal)}</strong><small>${run.run_id} · ${escapeHtml(run.workflow_type||'workflow')}</small></span><span><small>Status</small><strong>${escapeHtml(run.status)}</strong></span><span><small>Duration</small><strong>${fmtDuration(run.duration_ms)}</strong></span><span><small>Agents / events</small><strong>${run.agent_count||0} / ${run.event_count||0}</strong></span><span><small>Failures</small><strong>${run.failure_count||0}</strong></span><span><small>Cause</small><strong>${escapeHtml(run.failure_category||'—')}</strong></span></button>`).join('')||'<p class="empty-copy">No runs match these filters.</p>'; }
+function renderRunList(runs, isSearch = false) {
+  const heading = $('run-list-heading');
+  const sublabel = $('run-list-sublabel');
+  if (heading && sublabel) {
+    if (isSearch) {
+      heading.textContent = 'Search results';
+      sublabel.textContent = `${runs.length} RUN${runs.length === 1 ? '' : 'S'} MATCHING FILTER`;
+    } else {
+      heading.textContent = 'Recent runs';
+      sublabel.textContent = `LATEST ${runs.length} EXECUTIONS`;
+    }
+  }
+  $('run-list').innerHTML = runs.map(run => `<button class="run-row ${String(run.status).includes('fail') ? 'has-failure' : ''}" data-run="${run.run_id}"><span class="run-health"></span><span class="run-main"><strong>${escapeHtml(run.goal)}</strong><small>${run.run_id} · ${escapeHtml(run.workflow_type || 'workflow')}</small></span><span><small>Status</small><strong>${escapeHtml(run.status)}</strong></span><span><small>Duration</small><strong>${fmtDuration(run.duration_ms)}</strong></span><span><small>Agents / events</small><strong>${run.agent_count || 0} / ${run.event_count || 0}</strong></span><span><small>Failures</small><strong>${run.failure_count || 0}</strong></span><span><small>Cause</small><strong>${escapeHtml(run.failure_category || '—')}</strong></span></button>`).join('') || '<p class="empty-copy">' + (isSearch ? 'No runs match these filters.' : 'No runs recorded yet.') + '</p>';
+}
 $('run-list').addEventListener('click',e=>{const row=e.target.closest('[data-run]');if(row)void selectRun(row.dataset.run);});
 async function selectRun(id) {
   current=id; localStorage.setItem('lastRun',id); $('error').textContent='';

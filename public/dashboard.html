@@ -35,7 +35,8 @@
       <div class="metric-grid" id="global-metrics"></div>
       <div class="dashboard-chart"><div class="section-bar"><h2>Run outcomes</h2><span class="quiet-label">DAILY ACTIVITY</span></div><div id="outcome-chart" class="bar-chart" aria-label="Run outcome chart"></div></div>
       <div class="run-toolbar"><input id="run-search" type="search" placeholder="Search goal, run, agent, event, or error"><select id="run-status"><option value="">All statuses</option><option>succeeded</option><option>completed_with_failures</option><option>failed</option><option>cancelled</option></select><select id="failure-category"><option value="">All failure categories</option><option>APPLICATION_DEFECT</option><option>AGENT_MISTAKE</option><option>STATE_RACE</option><option>HANDOFF_CORRUPTION</option><option>EXPECTED_STOP</option><option>UNKNOWN</option></select><button id="refresh-runs" type="button">Refresh</button></div>
-      <div id="run-list" class="run-list" aria-live="polite"><p class="empty-copy">Loading runs…</p></div>
+      <div class="section-bar"><h2 id="run-list-heading">Recent runs</h2><span class="quiet-label" id="run-list-sublabel">LATEST 10 EXECUTIONS</span></div>
+      <div id="run-list" class="run-list" aria-live="polite"><p class="empty-copy">Loading recent runs…</p></div>
     </section>
     <section id="view-overview" class="view" aria-label="Run overview">
       <div id="run-summary" class="summary-shell"><p class="empty-copy">Choose a run from the run index.</p></div>
