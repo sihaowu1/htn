@@ -254,6 +254,8 @@ test('pg adapter issues the expected SQL against a mock pool', async () => {
   const queries: Array<{ text: string; values: unknown[] }> = [];
   const canned = (text: string) => {
     if (text.includes('FROM agent_executions WHERE run_id')) return { rows: [{ agent_id: 'worker' }], rowCount: 1 };
+    if (text.includes('FROM agent_executions a JOIN runs r')) return { rows: [{ agent_id: 'worker',
+      assigned_task: null, goal: 'g', workflow_type: 'browser_qa', status: 'running' }], rowCount: 1 };
     if (text.includes('SELECT goal FROM runs')) return { rows: [{ goal: 'g' }], rowCount: 1 };
     if (text.includes('SELECT 1 FROM schema_migrations')) return { rows: [], rowCount: 0 };
     if (text.includes('SELECT event_type, metadata FROM events')) return { rows: [], rowCount: 0 };
@@ -301,6 +303,7 @@ test('pg adapter issues the expected SQL against a mock pool', async () => {
     assert.ok(texts.some(t => t.includes('INSERT INTO agent_executions')));
     assert.ok(texts.some(t => t.includes('INSERT INTO events') && t.includes('ON CONFLICT (event_id) DO NOTHING')));
     assert.ok(texts.some(t => t.includes('INSERT INTO event_links')));
+    assert.ok(texts.some(t => t.includes('INSERT INTO search_index_outbox')));
     const eventInsert = queries.find(q => q.text.includes('INSERT INTO events'))!;
     assert.deepEqual(eventInsert.values.slice(0, 3), [first.event_id, run.run_id, agent.agent_execution_id]);
     await adapter.close();

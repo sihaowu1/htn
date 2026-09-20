@@ -1,5 +1,8 @@
 # Observability layer architecture
 
+Elasticsearch-specific indexing, retrieval, fallback, and operating procedures
+are documented in [Elasticsearch search layer](elasticsearch-search.md).
+
 This document describes the observability layer as currently implemented on the
 `observability` branch. It covers evidence production, durable storage, incident
 detection, investigation, report validation, and delivery. The observer is
@@ -181,7 +184,7 @@ The worker starts an investigation with only:
 { run_id, event_id, goal, signal }
 ```
 
-The model must pull additional evidence through six bounded tools:
+The model must pull additional evidence through eight bounded tools:
 
 | Tool | Scope and purpose |
 | --- | --- |
@@ -191,6 +194,8 @@ The model must pull additional evidence through six bounded tools:
 | `get_related_events` | Explicit incoming and outgoing event-link traversal |
 | `read_artifact` | At most 64 KiB per call, within a total byte budget, from a same-run artifact |
 | `get_sentry_trace` | Optional correlated Sentry events when query credentials are configured |
+| `search_run_evidence` | Optional Elastic lexical retrieval for current-run candidates; PostgreSQL hydrates every result and the agent must open it with an exact evidence tool before citation |
+| `find_similar_incidents` | Optional cross-run historical investigation matches that may guide hypotheses but cannot support current-run facts |
 
 `EvidenceTools` rejects cross-run access and accounts for tool calls, events read,
 and artifact bytes. Artifact and event contents are treated as untrusted evidence,
@@ -266,7 +271,8 @@ globally unique because every execution owns its own counter.
 
 - `GET /api/runs`, `GET /api/dashboard/metrics`, and the run-scoped `summary`,
   `graph`, and `metrics` endpoints back the historical run index and adaptive run
-  workspace. Search and filters execute in PostgreSQL.
+  workspace. Exact filters and authoritative hydration execute in PostgreSQL;
+  optional Elastic Cloud ranks text searches and falls back to PostgreSQL on failure.
 - `GET /api/runs/:id/events` returns filtered, paginated evidence and
   `GET /api/runs/:id/stream` replays persisted events before streaming new ones by
   SSE. Subscription occurs before replay; the client deduplicates overlap by event

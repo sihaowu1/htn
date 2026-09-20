@@ -50,6 +50,11 @@ export const config = {
   investigationMaxToolCalls: number('INVESTIGATION_MAX_TOOL_CALLS', 30),
   investigationMaxEvents: number('INVESTIGATION_MAX_EVENTS', 200),
   investigationMaxArtifactBytes: number('INVESTIGATION_MAX_ARTIFACT_BYTES', 262_144),
+  elasticsearchEnabled: parseBoolean('ELASTICSEARCH_ENABLED', process.env.ELASTICSEARCH_ENABLED, false),
+  elasticsearchUrl: process.env.ELASTICSEARCH_URL || '',
+  elasticsearchApiKey: process.env.ELASTICSEARCH_API_KEY || '',
+  elasticsearchIndexPrefix: process.env.ELASTICSEARCH_INDEX_PREFIX || 'htn',
+  elasticsearchTimeoutMs: number('ELASTICSEARCH_TIMEOUT_MS', 10_000),
   sentryEnvironment,
   sentryTracesSampleRate: parseSampleRate('SENTRY_TRACES_SAMPLE_RATE',
     process.env.SENTRY_TRACES_SAMPLE_RATE, defaults.tracesSampleRate),
@@ -61,6 +66,7 @@ export const config = {
     process.env.BROWSERBASE_REPLAY_ENABLED, true),
 };
 export function missingCredentials() {
-  return ['OPENAI_API_KEY', 'BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'SENTRY_DSN', 'DATABASE_URL']
-    .filter(key => !process.env[key]);
+  const required = ['OPENAI_API_KEY', 'BROWSERBASE_API_KEY', 'BROWSERBASE_PROJECT_ID', 'SENTRY_DSN', 'DATABASE_URL'];
+  if (config.elasticsearchEnabled) required.push('ELASTICSEARCH_URL', 'ELASTICSEARCH_API_KEY');
+  return required.filter(key => !process.env[key]);
 }

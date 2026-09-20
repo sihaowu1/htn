@@ -8,6 +8,7 @@ import { PgAdapter, type InvestigationJob } from './sdk/index.js';
 import { EvidenceTools } from './evidence-tools.js';
 import { InvestigationAgent } from './investigation.js';
 import { closeTelemetry, emitMetric, withSpan } from './telemetry.js';
+import { createSearchService, type SearchService } from './search.js';
 
 export class ObserverWorker {
   private workerId = `${hostname()}:${process.pid}:${randomUUID()}`;
@@ -16,24 +17,46 @@ export class ObserverWorker {
   private stopped = false;
   private wakeTimer?: ReturnType<typeof setTimeout>;
   private maintenance?: ReturnType<typeof setInterval>;
+  private searchMaintenance?: ReturnType<typeof setInterval>;
+  private indexing = false;
   private listener?: PoolClient;
 
-  constructor(private db: PgAdapter) {}
+  constructor(private db: PgAdapter, private search: SearchService = createSearchService()) {}
 
   async start() {
+    await this.search.initialize().catch(error => console.error('Elasticsearch initialization failed; indexing will retry', error));
     const listener = await this.db.pool.connect();
     this.listener = listener;
     await listener.query('LISTEN investigation_jobs');
     listener.on('notification', () => void this.drain());
     listener.on('error', (error: Error) => console.error('Investigation LISTEN connection failed', error));
     this.maintenance = setInterval(() => void this.recover(), 60_000);
+    if (this.search.available) this.searchMaintenance = setInterval(() => void this.drainSearch(), 5_000);
     await this.recover();
+    await this.drainSearch();
   }
 
   private async recover() {
     if (this.stopped) return;
     await this.db.recoverExpiredJobs();
+    await this.db.recoverExpiredSearchOutbox();
     await this.drain();
+    await this.drainSearch();
+  }
+
+  private async drainSearch() {
+    if (!this.search.available || this.indexing || this.stopped) return;
+    this.indexing = true;
+    let items: Awaited<ReturnType<PgAdapter['claimSearchOutbox']>> = [];
+    try {
+      items = await this.db.claimSearchOutbox(this.workerId);
+      if (!items.length) return;
+      await this.search.indexDocuments(items.map(item => ({ kind: item.kind, id: item.documentId, payload: item.payload })));
+      await this.db.completeSearchOutbox(this.workerId, items.map(item => item.outboxId));
+    } catch (error) {
+      await this.db.failSearchOutbox(this.workerId, items, error).catch(() => undefined);
+      console.error('Elasticsearch outbox batch failed', error);
+    } finally { this.indexing = false; }
   }
 
   private async scheduleNext() {
@@ -74,7 +97,7 @@ export class ObserverWorker {
       const tools = new EvidenceTools(this.db, job.runId, {
         maxCalls: config.investigationMaxToolCalls, maxEvents: config.investigationMaxEvents,
         maxArtifactBytes: config.investigationMaxArtifactBytes,
-      });
+      }, this.search);
       const report = await new InvestigationAgent(tools).run({ run_id: job.runId,
         event_id: job.triggerEventId, goal: job.goal, signal: job.signal }, controller.signal);
       await this.db.completeJob(job, this.workerId, report, config.model);
@@ -94,9 +117,9 @@ export class ObserverWorker {
 
   async stop() {
     this.stopped = true;
-    clearTimeout(this.wakeTimer); clearInterval(this.maintenance);
+    clearTimeout(this.wakeTimer); clearInterval(this.maintenance); clearInterval(this.searchMaintenance);
     if (this.listener) { await this.listener.query('UNLISTEN investigation_jobs').catch(() => undefined); this.listener.release(); }
-    while (this.active) await new Promise(resolve => setTimeout(resolve, 25));
+    while (this.active || this.indexing) await new Promise(resolve => setTimeout(resolve, 25));
   }
 }
 

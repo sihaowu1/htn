@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events';
 import pg from 'pg';
 import { config } from '../config.js';
 import type { InvestigationReport, InvestigationReportDraft } from '../types.js';
+import { searchableMetadata, type SearchHit } from '../search.js';
 import type { AgentExecution, Event, EventLink, Run } from './types.js';
 import type { StoreAdapter } from './harness.js';
 
@@ -16,6 +17,11 @@ const migrationsDir = fileURLToPath(new URL('../../sql/postgres/', import.meta.u
 export type InvestigationJob = {
   jobId: string; clusterId: string; runId: string; triggerEventId: string;
   goal: string; signal: string; generation: number; attemptCount: number;
+};
+
+export type SearchOutboxItem = {
+  outboxId: number; kind: 'event' | 'investigation'; documentId: string;
+  payload: Record<string, unknown>; attemptCount: number;
 };
 
 export type LegacyEvent = {
@@ -145,7 +151,8 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
         filename TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
       )`);
       const names = ['001_runs_and_agent_executions.sql', '002_events.sql', '003_event_links.sql',
-        '004_artifacts.sql', '005_investigations.sql', '006_dashboard_runs.sql'];
+        '004_artifacts.sql', '005_investigations.sql', '006_dashboard_runs.sql',
+        '007_search_index_outbox.sql'];
       for (const name of names) {
         const found = await client.query('SELECT 1 FROM schema_migrations WHERE filename = $1', [name]);
         if (found.rowCount) continue;
@@ -180,8 +187,10 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
     const client = await this.db.connect();
     try {
       await client.query('BEGIN');
-      const execution = await client.query<{ agent_id: string }>(
-        'SELECT agent_id FROM agent_executions WHERE run_id = $1 AND agent_execution_id = $2',
+      const execution = await client.query<{ agent_id: string; assigned_task: string | null; goal: string; workflow_type: string; status: string }>(
+        `SELECT a.agent_id, a.assigned_task, r.goal, r.workflow_type, r.status
+         FROM agent_executions a JOIN runs r USING (run_id)
+         WHERE a.run_id = $1 AND a.agent_execution_id = $2`,
         [event.run_id, event.agent_execution_id],
       );
       if (!execution.rowCount) throw new EventLinkUnresolvedError(
@@ -199,6 +208,18 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
       else {
         await enqueueInvestigationForEvent(client, { runId: event.run_id, eventId: event.event_id,
           type: event.event_type, data: event.metadata });
+        const searchable = searchableMetadata(event.metadata);
+        const source = execution.rows[0];
+        const payload = { document_kind: 'event', event_id: event.event_id, run_id: event.run_id,
+          agent_execution_id: event.agent_execution_id, agent_id: source.agent_id,
+          assigned_task: source.assigned_task, run_goal: source.goal, workflow_type: source.workflow_type,
+          status: source.status, event_type: event.event_type, occurred_at: event.occurred_at,
+          session_id: event.session_id, trace_id: event.trace_id, ...searchable.fields,
+          metadata_text: searchable.metadata_text };
+        await client.query(`INSERT INTO search_index_outbox (document_kind, document_id, run_id, payload)
+          VALUES ('event',$1,$2,$3) ON CONFLICT (document_kind, document_id) DO UPDATE SET
+          payload = EXCLUDED.payload, status = 'queued', available_at = clock_timestamp(), updated_at = clock_timestamp()`,
+        [event.event_id, event.run_id, JSON.stringify(payload)]);
         if (event.event_type === 'run.finished' || event.event_type === 'run.failed') {
           const status = textField(event.metadata, ['status', 'outcome']) ||
             (event.event_type === 'run.failed' ? 'failed' : 'completed');
@@ -483,6 +504,21 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
         (investigation_id, revision, job_id, cluster_id, run_id, trigger_event_id, outcome, report, model, prompt_version)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'1')`, [investigationId, revision, job.jobId, job.clusterId,
         job.runId, job.triggerEventId, full.outcome, full, model]);
+      const run = await client.query<{ goal: string; workflow_type: string; status: string }>(
+        'SELECT goal, workflow_type, status FROM runs WHERE run_id = $1', [job.runId]);
+      const source = run.rows[0];
+      const payload = { document_kind: 'investigation', investigation_id: investigationId,
+        revision, run_id: job.runId, trigger_event_id: job.triggerEventId, event_type: job.signal,
+        run_goal: source.goal, workflow_type: source.workflow_type, status: source.status,
+        investigation_status: 'succeeded', outcome: full.outcome, title: full.title,
+        summary: full.summary, observed_failure: full.observed_failure,
+        cause_category: full.likely_cause?.category, cause_explanation: full.likely_cause?.explanation,
+        confidence: full.likely_cause?.confidence, suggested_next_step: full.suggested_next_step,
+        reproduction_step: full.reproduction_step, created_at: new Date().toISOString() };
+      await client.query(`INSERT INTO search_index_outbox (document_kind, document_id, run_id, payload)
+        VALUES ('investigation',$1,$2,$3) ON CONFLICT (document_kind, document_id) DO UPDATE SET
+        payload = EXCLUDED.payload, status = 'queued', available_at = clock_timestamp(), updated_at = clock_timestamp()`,
+      [`${investigationId}:${revision}`, job.runId, JSON.stringify(payload)]);
       const done = await client.query(`UPDATE investigation_jobs SET status = 'succeeded', locked_by = NULL,
         lease_expires_at = NULL, updated_at = clock_timestamp() WHERE job_id = $1 AND locked_by = $2`, [job.jobId, workerId]);
       if (!done.rowCount) throw new Error('Investigation job lease was lost');
@@ -531,5 +567,86 @@ export class PgAdapter extends EventEmitter implements StoreAdapter {
 
   async close(): Promise<void> {
     await this.pool.end().catch(() => undefined);
+  }
+
+  async hydrateEventSearchHits(runId: string, hits: SearchHit[]) {
+    if (!hits.length) return [];
+    const ids = hits.map(hit => hit.id);
+    const result = await this.db.query(`SELECT e.*, a.agent_id FROM events e
+      JOIN agent_executions a USING (agent_execution_id)
+      WHERE e.run_id = $1 AND e.event_id = ANY($2::uuid[])`, [runId, ids]);
+    const rows = new Map(result.rows.map(row => [row.event_id, row]));
+    return hits.flatMap(hit => { const row = rows.get(hit.id); return row ? [{ ...row,
+      search_score: hit.score, search_highlights: hit.highlights }] : []; });
+  }
+
+  async hydrateRunSearchHits(hits: SearchHit[], input: { status?: string; workflowType?: string;
+    failureCategory?: string; investigationStatus?: string; from?: string; to?: string }) {
+    if (!hits.length) return [];
+    const ids = hits.map(hit => hit.id);
+    const values: unknown[] = [ids];
+    const where = ['r.run_id = ANY($1::uuid[])'];
+    const add = (sql: string, value: unknown) => { values.push(value); where.push(sql.replace('?', `$${values.length}`)); };
+    if (input.status) add('r.status = ?', input.status);
+    if (input.workflowType) add('r.workflow_type = ?', input.workflowType);
+    if (input.from) add('r.created_at >= ?', input.from);
+    if (input.to) add('r.created_at <= ?', input.to);
+    if (input.failureCategory) add(`EXISTS (SELECT 1 FROM investigation_reports irx WHERE irx.run_id = r.run_id
+      AND irx.report->'likely_cause'->>'category' = ?)`, input.failureCategory);
+    if (input.investigationStatus) add(`EXISTS (SELECT 1 FROM investigation_jobs ijx WHERE ijx.run_id = r.run_id
+      AND ijx.status = ?)`, input.investigationStatus);
+    const result = await this.db.query(`SELECT r.*,
+      COUNT(DISTINCT a.agent_execution_id)::int AS agent_count,
+      COUNT(DISTINCT e.event_id)::int AS event_count,
+      COUNT(DISTINCT ic.cluster_id)::int AS failure_count,
+      COUNT(DISTINCT ij.job_id) FILTER (WHERE ij.status IN ('queued','running'))::int AS investigation_backlog,
+      EXTRACT(EPOCH FROM (COALESCE(r.completed_at, clock_timestamp()) - r.created_at)) * 1000 AS duration_ms,
+      (ARRAY_AGG(ir.outcome ORDER BY ir.created_at DESC) FILTER (WHERE ir.outcome IS NOT NULL))[1] AS investigation_outcome,
+      (ARRAY_AGG(ir.report->'likely_cause'->>'category' ORDER BY ir.created_at DESC)
+        FILTER (WHERE ir.report->'likely_cause'->>'category' IS NOT NULL))[1] AS failure_category,
+      (ARRAY_AGG(ir.report->'likely_cause'->>'confidence' ORDER BY ir.created_at DESC)
+        FILTER (WHERE ir.report->'likely_cause'->>'confidence' IS NOT NULL))[1] AS confidence
+      FROM runs r LEFT JOIN agent_executions a USING (run_id) LEFT JOIN events e USING (agent_execution_id)
+      LEFT JOIN incident_clusters ic ON ic.run_id = r.run_id LEFT JOIN investigation_jobs ij ON ij.run_id = r.run_id
+      LEFT JOIN investigation_reports ir ON ir.run_id = r.run_id WHERE ${where.join(' AND ')} GROUP BY r.run_id`, values);
+    const rows = new Map(result.rows.map(row => [row.run_id, row]));
+    return hits.flatMap(hit => { const row = rows.get(hit.id); return row ? [{ ...row,
+      search_score: hit.score, search_highlights: hit.highlights }] : []; });
+  }
+
+  async claimSearchOutbox(workerId: string, limit = 100): Promise<SearchOutboxItem[]> {
+    const result = await this.db.query<any>(`WITH candidates AS (
+      SELECT outbox_id FROM search_index_outbox WHERE status = 'queued' AND available_at <= clock_timestamp()
+      ORDER BY available_at, outbox_id FOR UPDATE SKIP LOCKED LIMIT $2
+    ) UPDATE search_index_outbox o SET status = 'running', locked_by = $1,
+      lease_expires_at = clock_timestamp() + interval '60 seconds', attempt_count = attempt_count + 1,
+      updated_at = clock_timestamp() FROM candidates WHERE o.outbox_id = candidates.outbox_id RETURNING o.*`,
+    [workerId, limit]);
+    return result.rows.map(row => ({ outboxId: Number(row.outbox_id), kind: row.document_kind,
+      documentId: row.document_id, payload: row.payload, attemptCount: row.attempt_count }));
+  }
+
+  async completeSearchOutbox(workerId: string, ids: number[]) {
+    if (!ids.length) return;
+    await this.db.query(`UPDATE search_index_outbox SET status = 'completed', locked_by = NULL,
+      lease_expires_at = NULL, updated_at = clock_timestamp() WHERE locked_by = $1 AND outbox_id = ANY($2::bigint[])`,
+    [workerId, ids]);
+  }
+
+  async failSearchOutbox(workerId: string, items: SearchOutboxItem[], error: unknown) {
+    if (!items.length) return;
+    const ids = items.map(item => item.outboxId);
+    const attempt = Math.max(...items.map(item => item.attemptCount));
+    const delay = Math.min(60_000, 1000 * 2 ** Math.max(0, attempt - 1));
+    await this.db.query(`UPDATE search_index_outbox SET status = 'queued', locked_by = NULL,
+      lease_expires_at = NULL, available_at = clock_timestamp() + ($3 * interval '1 millisecond'),
+      last_error = $4, updated_at = clock_timestamp() WHERE locked_by = $1 AND outbox_id = ANY($2::bigint[])`,
+    [workerId, ids, delay, String(error).slice(0, 4000)]);
+  }
+
+  async recoverExpiredSearchOutbox() {
+    await this.db.query(`UPDATE search_index_outbox SET status = 'queued', locked_by = NULL,
+      lease_expires_at = NULL, available_at = clock_timestamp(), updated_at = clock_timestamp()
+      WHERE status = 'running' AND lease_expires_at < clock_timestamp()`);
   }
 }

@@ -11,6 +11,7 @@ import { closeTelemetry } from './telemetry.js';
 import { Runner } from './runner.js';
 import { ReplayNotFoundError, ReplayProviderError, ReplayService } from './replay.js';
 import type { Run } from './types.js';
+import { createSearchService } from './search.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -25,6 +26,8 @@ const store: PgAdapter | MemoryAdapter =
   config.databaseUrl ? new PgAdapter() : new MemoryAdapter();
 if (store instanceof PgAdapter) await store.init();
 const database = store instanceof PgAdapter ? store : undefined;
+const search = createSearchService();
+await search.initialize().catch(error => console.error('Elasticsearch search unavailable; using PostgreSQL fallback', error));
 const harness = new Harness(store);
 const replay = new ReplayService(async (runId, sessionId) =>
   (await store.readEvents(runId)).some(event => event.sessionId === sessionId));
@@ -64,7 +67,15 @@ app.get('/api/runs', async (req, res) => {
     workflowType: z.string().max(200).optional(), failureCategory: z.string().max(100).optional(),
     investigationStatus: z.string().max(100).optional(), from: z.string().datetime().optional(),
     to: z.string().datetime().optional() }).parse(req.query);
-  res.json(await database.listRuns(query));
+  if (query.search && search.available) {
+    try {
+      const result = await search.searchRuns({ query: query.search, ...query });
+      const items = await database.hydrateRunSearchHits(result.hits, query);
+      res.json({ items, total: result.total, limit: query.limit, offset: query.offset,
+        searchBackend: 'elasticsearch' }); return;
+    } catch (error) { console.error('Elasticsearch run search failed; using PostgreSQL fallback', error); }
+  }
+  res.json({ ...(await database.listRuns(query)), searchBackend: 'postgres' });
 });
 const requestSchema = z.object({ prompt: z.string().trim().min(1).max(8000), targetUrl: z.string().url(),
   maxWorkers: z.number().int().min(1).max(config.maxWorkers), flowMap: z.unknown().optional(), testSingleAction: z.boolean().default(false) });
@@ -159,7 +170,17 @@ app.get('/api/runs/:id/events', async (req, res) => {
   if (!database) { res.status(503).json({ error: 'DATABASE_URL is not configured' }); return; }
   const query = pageSchema.extend({ search: z.string().max(500).optional(), type: z.string().max(200).optional(),
     agent: z.string().max(500).optional() }).parse(req.query);
-  res.json(await database.queryEvents(req.params.id, query));
+  if (query.search && search.available) {
+    try {
+      const result = await search.searchEvents({ runId: req.params.id, query: query.search,
+        type: query.type, agent: query.agent, limit: query.limit, offset: query.offset });
+      const items = (await database.hydrateEventSearchHits(req.params.id, result.hits)).filter(item =>
+        (!query.type || item.event_type === query.type) && (!query.agent || item.agent_id === query.agent));
+      res.json({ items, total: result.total, limit: query.limit, offset: query.offset,
+        searchBackend: 'elasticsearch' }); return;
+    } catch (error) { console.error('Elasticsearch event search failed; using PostgreSQL fallback', error); }
+  }
+  res.json({ ...(await database.queryEvents(req.params.id, query)), searchBackend: 'postgres' });
 });
 app.get('/api/runs/:id/events/export', async (req, res) => {
   if (!database) { res.status(503).json({ error: 'DATABASE_URL is not configured' }); return; }

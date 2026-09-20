@@ -10,7 +10,8 @@
     "build": "tsc",
     "start": "node --import ./dist/telemetry.js dist/server.js",
     "start:observer": "node --import ./dist/telemetry.js dist/observer-worker.js",
-    "test": "tsx --test tests/core.test.ts tests/model.test.ts tests/crawler.test.ts tests/orchestrator.test.ts tests/node-execution.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts tests/sdk.test.ts tests/investigation.test.ts tests/replay.test.ts tests/telemetry.test.ts",
+    "search:backfill": "tsx src/search-backfill.ts",
+    "test": "tsx --test tests/core.test.ts tests/model.test.ts tests/crawler.test.ts tests/orchestrator.test.ts tests/node-execution.test.ts tests/browser.test.ts tests/lifecycle.test.ts tests/server.test.ts tests/sdk.test.ts tests/investigation.test.ts tests/replay.test.ts tests/telemetry.test.ts tests/search.test.ts",
     "test:browser": "tsx --test tests/browser.test.ts"
   },
   "engines": {
@@ -19,6 +20,7 @@
   "dependencies": {
     "@browserbasehq/sdk": "2.20.0",
     "@browserbasehq/stagehand": "^4.1.0",
+    "@elastic/elasticsearch": "^9.5.1",
     "@sentry/node": "^10.75.0",
     "@sentry/profiling-node": "^10.75.0",
     "dotenv": "18.0.1",

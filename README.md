@@ -35,8 +35,15 @@
    ```
 
    ```sh
-   npm run dev:observer
-   ```
+npm run dev:observer
+```
+
+Optional Elastic Cloud search is enabled with `ELASTICSEARCH_ENABLED=true`,
+`ELASTICSEARCH_URL`, and `ELASTICSEARCH_API_KEY`. After enabling it for an
+existing database, run `npm run search:backfill` once to build and atomically
+activate the event and investigation indices. See
+[`docs/architecture/elasticsearch-search.md`](docs/architecture/elasticsearch-search.md)
+for the indexing lifecycle, query behavior, trust boundaries, and operations.
 
 5. Paste the target's HTTPS tunnel URL, enter a task, choose maximum simultaneous workers, and click **Start**. Watch discovery, worker browsers, events, and investigation reports. Use **Stop** to cancel. When a Browserbase session closes, choose **Load replay** to fetch fresh provider-hosted HLS metadata and view the recording beside its authoritative event timeline. Replay availability follows Browserbase retention; an unavailable recording does not remove the PostgreSQL timeline. The temporary `TEST SINGLE ACTION` switch skips discovery and normal planning: one worker inspects the initial page, executes one simple requested task using only observed controls, and stops. PostgreSQL is authoritative for evidence. Sentry stores aggregate telemetry and sampled profiles, not prompts or replay video. Failure signals create deduplicated investigation jobs, and completed reports are published on the run event stream; use event agent/session IDs to match Browserbase and Sentry.
 

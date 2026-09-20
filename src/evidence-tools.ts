@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import type { PgAdapter } from './sdk/index.js';
+import type { SearchService } from './search.js';
 
 export type EvidenceToolName = 'get_run_summary' | 'get_event' | 'get_agent_events' |
-  'get_related_events' | 'read_artifact' | 'get_sentry_trace';
+  'get_related_events' | 'read_artifact' | 'get_sentry_trace' | 'search_run_evidence' |
+  'find_similar_incidents';
 
 export class EvidenceTools {
   private calls = 0;
@@ -12,7 +14,7 @@ export class EvidenceTools {
 
   constructor(private db: PgAdapter, private runId: string, private limits: {
     maxCalls: number; maxEvents: number; maxArtifactBytes: number;
-  }) {}
+  }, private search?: SearchService) {}
 
   async execute(name: EvidenceToolName, args: Record<string, unknown>) {
     if (++this.calls > this.limits.maxCalls) throw new Error('Investigation evidence-tool budget exhausted');
@@ -25,6 +27,17 @@ export class EvidenceTools {
       case 'get_related_events': return this.getRelatedEvents(String(args.event_id || ''));
       case 'read_artifact': return this.readArtifact(String(args.artifact_id || ''), Number(args.offset || 0), Number(args.limit || 4096));
       case 'get_sentry_trace': return this.getSentryTrace(String(args.trace_id || ''));
+      case 'search_run_evidence': return this.searchRunEvidence({
+        runId: String(args.run_id || ''), query: String(args.query || ''),
+        eventTypes: Array.isArray(args.event_types) ? args.event_types.map(String) : undefined,
+        agentIds: Array.isArray(args.agent_ids) ? args.agent_ids.map(String) : undefined,
+        before: args.before == null ? undefined : String(args.before),
+        after: args.after == null ? undefined : String(args.after), limit: Number(args.limit || 10),
+      });
+      case 'find_similar_incidents': return this.findSimilarIncidents({ query: String(args.query || ''),
+        eventType: args.event_type == null ? undefined : String(args.event_type),
+        causeCategory: args.cause_category == null ? undefined : String(args.cause_category),
+        limit: Number(args.limit || 5) });
       default: throw new Error(`Unknown evidence tool: ${name}`);
     }
   }
@@ -144,6 +157,45 @@ export class EvidenceTools {
     const body = await response.json();
     return { trace_id: traceId, available: true, events: Array.isArray(body) ? body.slice(0, 50) : body };
   }
+
+  async searchRunEvidence(input: { runId: string; query: string; eventTypes?: string[]; agentIds?: string[];
+    before?: string; after?: string; limit: number }) {
+    this.assertRun(input.runId);
+    const limit = Math.max(1, Math.min(25, Math.floor(input.limit)));
+    if (!this.search?.available) return { available: false, gap: 'Elasticsearch evidence search is not configured', candidates: [] };
+    try {
+      const result = await this.search.searchRunEvidence({ ...input, runId: this.runId, limit });
+      const hydrated = (await this.db.hydrateEventSearchHits(this.runId, result.hits)).filter(row =>
+        (!input.eventTypes?.length || input.eventTypes.includes(row.event_type)) &&
+        (!input.agentIds?.length || input.agentIds.includes(row.agent_id)) &&
+        (!input.before || new Date(row.occurred_at) < new Date(input.before)) &&
+        (!input.after || new Date(row.occurred_at) > new Date(input.after)));
+      this.takeEvents(hydrated.length);
+      return { available: true, total: result.total, candidates: hydrated.map(row => ({
+        event_id: row.event_id, agent_execution_id: row.agent_execution_id, agent_id: row.agent_id,
+        event_type: row.event_type, occurred_at: row.occurred_at, score: row.search_score,
+        highlights: row.search_highlights,
+      })), citation_requirement: 'Open a candidate with get_event, get_agent_events, or get_related_events before citing it.' };
+    } catch (error) {
+      return { available: false, gap: `Elasticsearch evidence search failed: ${String(error)}`, candidates: [] };
+    }
+  }
+
+  async findSimilarIncidents(input: { query: string; eventType?: string; causeCategory?: string; limit: number }) {
+    const limit = Math.max(1, Math.min(10, Math.floor(input.limit)));
+    if (!this.search?.available) return { available: false, gap: 'Elasticsearch incident search is not configured', matches: [] };
+    try {
+      const result = await this.search.findSimilarIncidents({ runId: this.runId, ...input, limit });
+      return { available: true, historical_context_only: true, matches: result.hits.map(hit => ({
+        run_id: hit.source.run_id, investigation_id: hit.source.investigation_id,
+        trigger_event_type: hit.source.event_type, outcome: hit.source.outcome,
+        cause_category: hit.source.cause_category, confidence: hit.source.confidence,
+        summary: hit.source.summary, score: hit.score, highlights: hit.highlights,
+      })) };
+    } catch (error) {
+      return { available: false, gap: `Elasticsearch incident search failed: ${String(error)}`, matches: [] };
+    }
+  }
 }
 
 export const evidenceToolDefinitions = [
@@ -162,4 +214,13 @@ export const evidenceToolDefinitions = [
       limit: { type: 'integer', minimum: 1, maximum: 65536 } }, required: ['artifact_id', 'offset', 'limit'], additionalProperties: false } },
   { name: 'get_sentry_trace', description: 'Fetch correlated Sentry events for a trace ID.',
     parameters: { type: 'object', properties: { trace_id: { type: 'string' } }, required: ['trace_id'], additionalProperties: false } },
+  { name: 'search_run_evidence', description: 'Find candidate events in the current run. Open candidates with an exact evidence tool before citing them.',
+    parameters: { type: 'object', properties: { run_id: { type: 'string' }, query: { type: 'string', minLength: 1, maxLength: 500 },
+      event_types: { type: 'array', items: { type: 'string' }, maxItems: 20 },
+      agent_ids: { type: 'array', items: { type: 'string' }, maxItems: 20 }, before: { type: 'string' }, after: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 25 } }, required: ['run_id', 'query', 'limit'], additionalProperties: false } },
+  { name: 'find_similar_incidents', description: 'Find similar completed investigations in other runs as historical context, never as evidence for current-run facts.',
+    parameters: { type: 'object', properties: { query: { type: 'string', minLength: 1, maxLength: 500 },
+      event_type: { type: 'string' }, cause_category: { type: 'string' },
+      limit: { type: 'integer', minimum: 1, maximum: 10 } }, required: ['query', 'limit'], additionalProperties: false } },
 ] as const;
