@@ -10,6 +10,7 @@ window.renderInvestigations = renderInvestigations;
 let eventLogOffset = 0, eventLogPageSize = 50, eventLogFilter = 'all';
 const seen = new Set(), cards = new Map();
 const eventRows = new Map(), replays = new Map();
+function debounce(fn,ms){let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),ms);};}
 async function request(url, options) { const response = await fetch(url, options); const data = await response.json(); if (!response.ok) throw new Error(data.error || response.statusText); return data; }
 function escapeHtml(value) { return String(value ?? '').replace(/[&<>'"]/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;' })[c]); }
 function fmtDuration(ms) { if (ms == null) return 'running'; const s = Math.max(0, Math.round(Number(ms) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s/60)}m ${s%60}s`; }
@@ -526,6 +527,7 @@ if (investSummary) {
     }
   });
 }
+$('refresh-runs').onclick=loadRuns;$('run-search').addEventListener('input',debounce(loadRuns,250));$('run-status').onchange=loadRuns;$('failure-category').onchange=loadRuns;$('event-log-search').addEventListener('input',debounce(()=>renderEventLog(true),250));$('event-log-prev').onclick=()=>{eventLogOffset=Math.max(0,eventLogOffset-eventLogPageSize);void renderEventLog();};$('event-log-next').onclick=()=>{eventLogOffset+=eventLogPageSize;void renderEventLog();};$('agent-pills').onclick=e=>{const pill=e.target.closest('.agent-pill');if(!pill)return;eventLogFilter=pill.dataset.agent;renderEventLog(true);};
 const agentMessages = {
   starting: ['Getting the team ready.', 'Preparing a new run.'],
   discovering: ['A little look around first.', 'Mapping the paths your website can take.'],
@@ -714,11 +716,11 @@ function connect(id){
   stream.onerror = () => { $('error').textContent = 'Live stream disconnected; reconnecting automatically.'; };
   stream.onopen = () => { $('error').textContent = ''; };
 }
-$('form').addEventListener('submit', () => {
-  eventRows.clear(); for (const state of replays.values()) state.hls?.destroy(); replays.clear();
-}, { capture: true });
 $('form').addEventListener('submit', async e => {
   e.preventDefault();
+  eventRows.clear();
+  for (const state of replays.values()) state.hls?.destroy();
+  replays.clear();
   $('error').textContent = '';
   $('start').disabled = true;
   updateLookoutBot('starting');
