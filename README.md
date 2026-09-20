@@ -38,7 +38,7 @@ Three workers run distinct paths at once.
 
 Know what your agents actually did.
 
-- **Global Event Log**: Actions, model calls, browser events, errors, and outcomes are written to `logs/events.jsonl`, correlated by run, agent, and session IDs.
+- **Global Event Log**: Actions, tool calls, browser events, errors, and outcomes are written to `logs/events.jsonl`, correlated by run, agent, and session IDs.
 - **Evidence-Backed Reports**: The observer cites real log events and separates observed failures from suspected causes.
 - **Training Data**: Successful and failed runs leave a record for debugging your site and improving future models.
 
