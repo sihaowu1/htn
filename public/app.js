@@ -80,103 +80,121 @@ function renderFlow() {
   const times = nodes.map(n => new Date(n.occurred_at).getTime());
   const min = Math.min(...times), max = Math.max(...times, min + 1);
   const durationMs = max - min;
-  const pxPerMs = Math.max(0.25, Math.min(2, 8000 / Math.max(durationMs, 1000)));
-  const axisPadding = 16, nodeWidth = 122, laneWidth = Math.max(nodeWidth + 28, 160);
-  const totalWidth = Math.max(container.clientWidth - 30, laneNames.length * laneWidth + axisPadding + 20);
-  let totalHeight = Math.max(280, durationMs * pxPerMs + 120);
+
+  const labelWidth = 130;
+  const nodeWidth = 126;
+  const availableWidth = Math.max(container.clientWidth - labelWidth - 40, 500);
+  const pxPerMs = Math.max(0.015, Math.min(0.06, availableWidth / Math.max(durationMs, 10000)));
 
   statsEl.innerHTML = `<span><strong>${nodes.length}</strong><em>events</em></span><span><strong>${nodes.filter(n => isFailure(n.type, n.metadata)).length}</strong><em>failures</em></span><span><strong>${laneNames.length}</strong><em>agents</em></span><span><strong>${fmtDuration(durationMs)}</strong><em>duration</em></span><span class="quiet-label">SELECT AN EVENT TO OPEN EVIDENCE</span>`;
 
-  axisEl.innerHTML = '';
-  const ticks = Math.max(4, Math.floor(totalWidth / 120));
+  const predecessors = new Map();
+  for (const n of nodes) predecessors.set(n.id, []);
+  for (const e of graph.edges) {
+    if (predecessors.has(e.target)) predecessors.get(e.target).push(e.source);
+  }
+
+  const nodesSorted = [...nodes].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
+  const laneLastRight = new Map();
+  for (const name of laneNames) laneLastRight.set(name, 16);
+  const nodeComputedLeft = new Map();
+  let maxRight = 400;
+
+  for (const n of nodesSorted) {
+    const naturalLeft = 16 + (new Date(n.occurred_at).getTime() - min) * pxPerMs;
+    let left = naturalLeft;
+    const prevInLane = laneLastRight.get(n.agent_id) ?? 16;
+    if (prevInLane > 16) {
+      left = Math.max(left, prevInLane + 20);
+    }
+    for (const predId of predecessors.get(n.id) || []) {
+      const predLeft = nodeComputedLeft.get(predId);
+      if (predLeft != null) {
+        left = Math.max(left, predLeft + nodeWidth + 24);
+      }
+    }
+    nodeComputedLeft.set(n.id, left);
+    laneLastRight.set(n.agent_id, left + nodeWidth);
+    if (left + nodeWidth > maxRight) maxRight = left + nodeWidth;
+  }
+
+  const trackWidth = Math.max(container.clientWidth - labelWidth - 20, maxRight + 60);
+  const totalWidth = labelWidth + trackWidth;
+  const laneHeight = 76;
+  const totalHeight = laneNames.length * laneHeight;
+
+  axisEl.style.width = `${totalWidth}px`;
+  const ticks = Math.max(4, Math.floor(trackWidth / 150));
+  let marksHtml = '';
   for (let i = 0; i <= ticks; i++) {
     const t = min + (max - min) * (i / ticks);
-    const left = axisPadding + (t - min) * pxPerMs;
-    const mark = document.createElement('mark');
-    mark.style.left = `${left}px`;
-    const label = document.createElement('label');
-    label.textContent = fmtTime(new Date(t));
-    mark.append(label);
-    axisEl.append(mark);
+    const left = 16 + (t - min) * pxPerMs;
+    marksHtml += `<mark style="left:${left}px"><label>${fmtTime(new Date(t))}</label></mark>`;
   }
+  axisEl.innerHTML = `<div class="flow-axis-corner">AGENT / TIME</div><div class="flow-axis-track" style="width:${trackWidth}px;">${marksHtml}</div>`;
 
   lanesEl.style.width = `${totalWidth}px`;
   lanesEl.style.height = `${totalHeight}px`;
   lanesEl.innerHTML = laneNames.map(name =>
-    `<div class="flow-lane" data-agent="${escapeHtml(name)}"><div class="flow-lane-label">${escapeHtml(name)}</div><div class="flow-nodes" data-agent="${escapeHtml(name)}"></div></div>`
+    `<div class="flow-lane" data-agent="${escapeHtml(name)}">
+      <div class="flow-lane-label" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
+      <div class="flow-nodes" data-agent="${escapeHtml(name)}" style="width:${trackWidth}px;"></div>
+    </div>`
   ).join('');
 
-  const nodesByLane = new Map();
-  for (const name of laneNames) nodesByLane.set(name, []);
-  for (const n of nodes) {
-    if (!nodesByLane.has(n.agent_id)) nodesByLane.set(n.agent_id, []);
-    nodesByLane.get(n.agent_id).push(n);
-  }
-
-  let maxBottom = 0;
   const nodeButtons = new Map();
-
-  for (const [agentId, laneNodes] of nodesByLane.entries()) {
-    const lane = lanesEl.querySelector(`.flow-nodes[data-agent="${CSS.escape(agentId)}"]`);
+  for (const n of nodes) {
+    const lane = lanesEl.querySelector(`.flow-nodes[data-agent="${CSS.escape(n.agent_id)}"]`);
     if (!lane) continue;
-    laneNodes.sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
-
-    let lastBottom = 16;
-    for (const n of laneNodes) {
-      const naturalTop = 24 + (new Date(n.occurred_at).getTime() - min) * pxPerMs;
-      const top = Math.max(naturalTop, lastBottom + 16);
-      const status = eventStatus(n.type, n.metadata);
-      const detail = extractDetail(n.type, n.metadata);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `flow-node ${status === 'failure' ? 'failure' : ''} ${selectedEvent === n.id ? 'selected' : ''}`;
-      btn.dataset.event = n.id;
-      btn.dataset.status = status;
-      btn.style.top = `${Math.round(top)}px`;
-      btn.style.left = `${axisPadding}px`;
-      btn.title = `${escapeHtml(n.type)}\n${detail ? escapeHtml(detail) + '\n' : ''}${fmtTime(n.occurred_at)} · seq ${n.sequence_number}`;
-      btn.innerHTML = `<span class="node-type"><span class="status-dot"></span>${escapeHtml(n.type)}</span>${detail ? `<span class="node-detail">${escapeHtml(detail)}</span>` : ''}<span class="node-time">${fmtTime(n.occurred_at)}</span>`;
-      lane.append(btn);
-      nodeButtons.set(n.id, btn);
-
-      const estimatedHeight = detail ? 56 : 42;
-      const cardHeight = btn.offsetHeight || estimatedHeight;
-      lastBottom = top + cardHeight;
-      if (lastBottom > maxBottom) maxBottom = lastBottom;
-    }
+    const left = nodeComputedLeft.get(n.id) ?? 16;
+    const status = eventStatus(n.type, n.metadata);
+    const detail = extractDetail(n.type, n.metadata);
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `flow-node ${status === 'failure' ? 'failure' : ''} ${selectedEvent === n.id ? 'selected' : ''}`;
+    btn.dataset.event = n.id;
+    btn.dataset.status = status;
+    btn.style.left = `${Math.round(left)}px`;
+    btn.style.top = '11px';
+    btn.title = `${escapeHtml(n.type)}\n${detail ? escapeHtml(detail) + '\n' : ''}${fmtTime(n.occurred_at)} · seq ${n.sequence_number}`;
+    btn.innerHTML = `<span class="node-type"><span class="status-dot"></span>${escapeHtml(n.type)}</span>${detail ? `<span class="node-detail">${escapeHtml(detail)}</span>` : ''}<span class="node-time">${fmtTime(n.occurred_at)}</span>`;
+    lane.append(btn);
+    nodeButtons.set(n.id, btn);
   }
 
-  if (maxBottom + 60 > totalHeight) {
-    totalHeight = maxBottom + 60;
-    lanesEl.style.height = `${totalHeight}px`;
-  }
   edgesEl.style.width = `${totalWidth}px`;
-  edgesEl.style.height = `${totalHeight + 40}px`;
+  edgesEl.style.height = `${totalHeight + 32}px`;
 
   const edgesRect = edgesEl.getBoundingClientRect();
   const nodePositions = new Map();
   const isVisible = edgesRect.width > 0;
   const laneIndexMap = new Map(laneNames.map((name, idx) => [name, idx]));
-  const computedLaneWidth = totalWidth / laneNames.length;
 
   for (const n of nodes) {
     const btn = nodeButtons.get(n.id);
     if (!btn) continue;
     if (isVisible) {
-      const btnRect = btn.getBoundingClientRect();
+      const r = btn.getBoundingClientRect();
       nodePositions.set(n.id, {
-        x: btnRect.left - edgesRect.left + btnRect.width / 2,
-        top: btnRect.top - edgesRect.top,
-        bottom: btnRect.bottom - edgesRect.top
+        left: Math.round(r.left - edgesRect.left),
+        right: Math.round(r.right - edgesRect.left),
+        x: Math.round(r.left - edgesRect.left + r.width / 2),
+        y: Math.round(r.top - edgesRect.top + r.height / 2),
+        top: Math.round(r.top - edgesRect.top),
+        bottom: Math.round(r.bottom - edgesRect.top)
       });
     } else {
       const laneIdx = laneIndexMap.get(n.agent_id) ?? 0;
-      const x = laneIdx * computedLaneWidth + axisPadding + nodeWidth / 2;
-      const btnTop = parseFloat(btn.style.top) || 0;
-      const yTop = 76 + btnTop;
-      const detail = extractDetail(n.type, n.metadata);
-      const h = detail ? 56 : 42;
-      nodePositions.set(n.id, { x, top: yTop, bottom: yTop + h });
+      const left = labelWidth + (nodeComputedLeft.get(n.id) ?? 16);
+      const top = 28 + laneIdx * laneHeight + 11;
+      nodePositions.set(n.id, {
+        left,
+        right: left + nodeWidth,
+        x: left + nodeWidth / 2,
+        y: top + 26,
+        top,
+        bottom: top + 52
+      });
     }
   }
 
@@ -187,23 +205,27 @@ function renderFlow() {
     if (!posA || !posB) continue;
 
     let x1, y1, x2, y2;
-    if (posA.top <= posB.top) {
-      x1 = posA.x; y1 = posA.bottom;
-      x2 = posB.x; y2 = posB.top;
+    if (posA.left <= posB.left) {
+      x1 = posA.right;
+      y1 = posA.y;
+      x2 = posB.left;
+      y2 = posB.y;
     } else {
-      x1 = posA.x; y1 = posA.top;
-      x2 = posB.x; y2 = posB.bottom;
+      x1 = posA.left;
+      y1 = posA.y;
+      x2 = posB.right;
+      y2 = posB.y;
     }
 
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     let d;
-    if (Math.abs(x1 - x2) < 4) {
+    if (Math.abs(y1 - y2) < 4) {
       d = `M ${x1} ${y1} L ${x2} ${y2}`;
     } else {
-      const dy = Math.max(24, Math.abs(y2 - y1));
-      const cy1 = y1 <= y2 ? y1 + dy * 0.5 : y1 - dy * 0.5;
-      const cy2 = y1 <= y2 ? y2 - dy * 0.5 : y2 + dy * 0.5;
-      d = `M ${x1} ${y1} C ${x1} ${cy1} ${x2} ${cy2} ${x2} ${y2}`;
+      const dx = Math.max(24, Math.abs(x2 - x1));
+      const cx1 = x1 <= x2 ? x1 + dx * 0.5 : x1 - dx * 0.5;
+      const cx2 = x1 <= x2 ? x2 - dx * 0.5 : x2 + dx * 0.5;
+      d = `M ${x1} ${y1} C ${cx1} ${y1} ${cx2} ${y2} ${x2} ${y2}`;
     }
     const isHighlighted = selectedEvent && (e.source === selectedEvent || e.target === selectedEvent);
     path.setAttribute('d', d);
