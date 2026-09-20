@@ -441,10 +441,10 @@ $('stop').onclick = async () => {
   catch (error) { $('error').textContent = error.message; }
 };
 request('/api/config').then(c => {
-  $('workers').min = c.maxWorkers;
+  $('workers').min = 1;
   $('workers').max = c.maxWorkers;
-  $('workers').value = c.maxWorkers;
-  $('workers').readOnly = true;
+  $('workers').value = Math.min(Number($('workers').value) || 2, c.maxWorkers);
+  $('workers').readOnly = false;
   if (c.missingCredentials.length) $('error').textContent = `Configure .env and restart: ${c.missingCredentials.join(', ')}`;
 }).catch(e => { $('error').textContent = e.message; });
 const previous = localStorage.getItem('lastRun');

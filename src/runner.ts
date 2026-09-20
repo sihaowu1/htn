@@ -19,7 +19,7 @@ export class Runner {
   constructor(public harness: Harness, private publish: (run: Run) => void) {}
   start(prompt: string, targetUrl: string, maxWorkers: number, supplied?: FlowMap, testSingleAction = false) {
     if (this.active) throw new Error('A run is already active');
-    maxWorkers = testSingleAction ? 1 : config.maxWorkers;
+    maxWorkers = testSingleAction ? 1 : Math.max(1, Math.min(maxWorkers || config.maxWorkers, config.maxWorkers));
     const run: Run = { id: randomUUID(), prompt, targetUrl, maxWorkers, status: 'starting', sessions: [], findings: [], results: [] };
     const controller = new AbortController();
     this.runs.set(run.id, run);
