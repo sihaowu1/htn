@@ -2,125 +2,6 @@ import { eventKey, eventOffsetSeconds, eventsForSession, isPlaybackEvent,
   nearestEventIndex } from './replay-utils.js';
 
 const $ = id => document.getElementById(id);
-<<<<<<< HEAD
-$('nav').addEventListener('click', event => {
-  const button = event.target.closest('button[data-view]');
-  if (!button) return;
-  for (const b of $('nav').querySelectorAll('button')) {
-    b.classList.toggle('active', b === button);
-    if (b === button) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
-  }
-  for (const view of document.querySelectorAll('.view')) view.classList.toggle('active', view.id === `view-${button.dataset.view}`);
-  const headings = {
-    browsers: ['Control Room', 'A front-row seat to every path, click, and discovery.'],
-    observer: ['A second pair of eyes', 'Observed facts, possible causes, and the evidence behind them.'],
-    results: ['Every path has an outcome', 'See where each assigned task landed.'],
-    events: ['The whole story', 'Follow the observations and actions behind a run.'],
-  };
-  $('view-name').textContent = button.dataset.view[0].toUpperCase() + button.dataset.view.slice(1);
-  $('page-title').replaceChildren(document.createTextNode(headings[button.dataset.view][0]), Object.assign(document.createElement('span'), { textContent: '.' }));
-  $('page-description').textContent = headings[button.dataset.view][1];
-});
-let current, stream;
-const seen = new Set();
-const cards = new Map();
-const eventRows = new Map();
-async function request(url, options) {
-  const response = await fetch(url, options);
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || response.statusText);
-  return data;
-}
-function render(run) {
-  current = run.id;
-  $('status').textContent = run.status.replaceAll('_', ' ');
-  $('status').title = `Run ${run.id}`;
-  document.body.dataset.phase = run.status;
-  $('feed-count').textContent = String(run.sessions.filter(s => s.status === 'running').length).padStart(2, '0');
-  $('empty-monitors').hidden = run.sessions.length > 0;
-  const messages = {
-    starting: ['Getting the team ready.', 'Preparing a new run.'],
-    discovering: ['A little look around first.', 'Mapping the paths your website can take.'],
-    planning: ['Finding the right paths.', 'Choosing what matters for your task.'],
-    running: ['Eyes on the browsers.', 'The team is working through its assigned paths.'],
-    cancelling: ['Bringing everyone back.', 'Stopping work and closing browser sessions.'],
-    observing: ['One last look at the evidence.', 'Browsers are closing while the observer finishes.'],
-    succeeded: ['The assigned tasks are complete.', 'Results and observer reports are ready to review.'],
-    completed_with_failures: ['A few things need a closer look.', 'Check the results and their supporting events.'],
-    blocked: ['We need a different path.', 'The run could not find an executable task path.'],
-    failed: ['Something interrupted the run.', 'The event log has the details.'],
-    cancelled: ['Everyone is off duty.', 'This run was cancelled.'],
-  };
-  const message = messages[run.status] || ['Keeping an eye on things.', 'Run updates will appear here.'];
-  $('agent-message').textContent = message[0];
-  $('agent-detail').textContent = message[1];
-  $('stop').disabled = !['starting', 'discovering', 'planning', 'running', 'cancelling'].includes(run.status);
-  $('start').disabled = !$('stop').disabled || run.status === 'observing';
-  $('plan').textContent = JSON.stringify(run.plan || {}, null, 2);
-  $('results').textContent = JSON.stringify(run.results, null, 2);
-  $('findings').textContent = run.findings.map(f => JSON.stringify(f, null, 2)).join('\n\n') || 'No findings yet';
-  if (run.map) {
-    const visited = new Set();
-    function tree(id) {
-      if (visited.has(id)) return { stateId: id, reference: true };
-      visited.add(id);
-      const state = run.map.states.find(candidate => candidate.id === id);
-      return { stateId: id, task: state?.task || '', branches: run.map.transitions.filter(t => t.from === id).map(t => ({
-        id: t.id, actions: t.actions, status: t.status, reason: t.reason, next: t.to ? tree(t.to) : null,
-      })) };
-    }
-    $('tree').textContent = JSON.stringify({ status: run.map.status, notes: run.map.notes, tree: tree(run.map.rootId) }, null, 2);
-    $('download').hidden = false; $('download').href = `/api/runs/${run.id}/map`;
-  }
-  for (const info of run.sessions) {
-    let card = cards.get(info.sessionId);
-    if (!card) {
-      card = document.createElement('div'); card.className = 'session';
-      const header = document.createElement('div'); header.className = 'monitor-header';
-      const label = document.createElement('span'); label.className = 'session-label';
-      const status = document.createElement('span'); status.className = 'session-status';
-      header.append(label, status);
-      const screen = document.createElement('div'); screen.className = 'feed-screen';
-      const footer = document.createElement('div'); footer.className = 'monitor-footer';
-      const identity = document.createElement('span'); identity.className = 'session-identity';
-      const mode = document.createElement('span'); mode.textContent = 'READ ONLY';
-      footer.append(identity, mode); card.append(header, screen, footer);
-      cards.set(info.sessionId, card); $('sessions').append(card);
-    }
-    if (info.status === 'running' && info.liveUrl) {
-      let frame = card.querySelector('iframe');
-      card.querySelector('.feed-placeholder')?.remove();
-      if (!frame) { frame = document.createElement('iframe'); frame.title = `Live browser: ${info.agentId}`; card.querySelector('.feed-screen').append(frame); }
-      const url = new URL(info.liveUrl); url.searchParams.set('readOnly', 'true');
-      // Browserbase may redirect/canonicalize the iframe URL. Comparing
-      // frame.src to the original URL then reloads DevTools on every run
-      // update, closing its WebSocket even though the session is healthy.
-      if (frame.dataset.liveUrl !== info.liveUrl) {
-        frame.dataset.liveUrl = info.liveUrl;
-        frame.src = url.href;
-      }
-    } else {
-      card.querySelector('iframe')?.remove();
-      let placeholder = card.querySelector('.feed-placeholder');
-      if (!placeholder) { placeholder = document.createElement('div'); placeholder.className = 'feed-placeholder'; card.querySelector('.feed-screen').append(placeholder); }
-      placeholder.textContent = info.status === 'running' ? 'Connecting the live view…' : info.status === 'closed' ? 'Session closed · see results and events' : `Session ${info.status} · check events`;
-    }
-    if (info.status === 'running' && !info.liveUrl) {
-      let note = card.querySelector('.live-view-note');
-      if (!note) { note = document.createElement('small'); note.className = 'live-view-note'; card.append(note); }
-      note.textContent = 'Live view URL is not available yet; check the session events for details.';
-    } else card.querySelector('.live-view-note')?.remove();
-    card.dataset.status = info.status;
-    card.querySelector('.session-label').textContent = `CAM ${String(run.sessions.indexOf(info) + 1).padStart(2, '0')} / ${info.agentId.toUpperCase()}`;
-    card.querySelector('.session-status').textContent = info.status === 'running' && info.liveUrl ? 'LIVE' : info.status.toUpperCase();
-    card.querySelector('.session-identity').textContent = `${info.role} · ${info.sessionId}`;
-    card.querySelector('.session-identity').title = info.sessionId;
-    let instruction = card.querySelector('.session-instruction');
-    if (info.instruction) {
-      if (!instruction) { instruction = document.createElement('p'); instruction.className = 'session-instruction'; card.append(instruction); }
-      instruction.textContent = info.instruction;
-    } else instruction?.remove();
-=======
 let current, stream, graph = { nodes: [], edges: [] }, selectedEvent;
 let eventLogOffset = 0, eventLogPageSize = 50, eventLogFilter = 'all';
 const seen = new Set(), cards = new Map();
@@ -145,7 +26,7 @@ function extractDetail(type, data = {}) {
   return '';
 }
 function fmtTime(iso) { try { return new Date(iso).toLocaleTimeString(); } catch { return iso; } }
-const headings = { runs:['Run intelligence','Find a run, understand its outcome, and follow the evidence.'], overview:['Run overview','A consistent summary of agents, signals, coverage, and decisions.'], investigate:['Failure investigation','Follow the causal path from assumptions to effects.'], browsers:['Observation room','A front-row seat to every browser path and action.'] };
+const headings = { runs:['Run intelligence','Find a run, understand its outcome, and follow the evidence.'], overview:['Run overview','A consistent summary of agents, signals, coverage, and decisions.'], investigate:['Failure investigation','Follow the causal path from assumptions to effects.'], browsers:['Control Room','A front-row seat to every browser path and action.'] };
 function showView(name) { for (const b of $('nav').querySelectorAll('button')) { const active = b.dataset.view === name; b.classList.toggle('active', active); active ? b.setAttribute('aria-current','page') : b.removeAttribute('aria-current'); } for (const view of document.querySelectorAll('.view')) view.classList.toggle('active', view.id === `view-${name}`); $('view-name').textContent = name[0].toUpperCase()+name.slice(1); $('page-title').replaceChildren(document.createTextNode(headings[name][0]), Object.assign(document.createElement('span'), {textContent:'.'})); $('page-description').textContent = headings[name][1]; $('form').hidden = name !== 'browsers'; }
 $('nav').addEventListener('click', event => { const button = event.target.closest('button[data-view]'); if (button) showView(button.dataset.view); });
 
@@ -170,45 +51,59 @@ function selectEvent(id){selectedEvent=id;renderFlow();renderEventLog();const n=
 document.addEventListener('click',e=>{const target=e.target.closest('[data-event]');if(target&&!target.closest('#run-list'))selectEvent(target.dataset.event);});$('close-drawer').onclick=()=>{$('evidence-drawer').hidden=true;};
 function debounce(fn,ms){let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),ms);};}$('refresh-runs').onclick=loadRuns;$('run-search').addEventListener('input',debounce(loadRuns,250));$('run-status').onchange=loadRuns;$('failure-category').onchange=loadRuns;$('event-log-search').addEventListener('input',debounce(()=>renderEventLog(true),250));$('event-log-prev').onclick=()=>{eventLogOffset=Math.max(0,eventLogOffset-eventLogPageSize);void renderEventLog();};$('event-log-next').onclick=()=>{eventLogOffset+=eventLogPageSize;void renderEventLog();};$('agent-pills').onclick=e=>{const pill=e.target.closest('.agent-pill');if(!pill)return;eventLogFilter=pill.dataset.agent;renderEventLog(true);};
 function renderLive(run){current=run.id;$('status').textContent=run.status.replaceAll('_',' ');document.body.dataset.phase=run.status;$('feed-count').textContent=String(run.sessions.filter(s=>s.status==='running').length).padStart(2,'0');$('empty-monitors').hidden=run.sessions.length>0;$('stop').disabled=!['starting','discovering','planning','running','cancelling'].includes(run.status);$('start').disabled=!$('stop').disabled||run.status==='observing';$('plan').textContent=JSON.stringify(run.plan||{},null,2);if(run.map){$('tree').textContent=JSON.stringify(run.map,null,2);$('download').hidden=false;$('download').href=`/api/runs/${run.id}/map`;}for(const info of run.sessions){let card=cards.get(info.sessionId);if(!card){card=document.createElement('div');card.className='session';card.innerHTML='<div class="monitor-header"><span class="session-label"></span><span class="session-status"></span></div><div class="feed-screen"></div><div class="monitor-footer"><span class="session-identity"></span><span>READ ONLY</span></div>';cards.set(info.sessionId,card);$('sessions').append(card);}card.dataset.status=info.status;card.querySelector('.session-label').textContent=`${info.role} / ${info.agentId}`;card.querySelector('.session-status').textContent=info.status;card.querySelector('.session-identity').textContent=info.sessionId;const screen=card.querySelector('.feed-screen');if(info.status==='running'&&info.liveUrl){let frame=screen.querySelector('iframe');if(!frame){screen.replaceChildren();frame=document.createElement('iframe');frame.title=`Live browser: ${info.agentId}`;screen.append(frame);}if(frame.dataset.liveUrl!==info.liveUrl){const url=new URL(info.liveUrl);url.searchParams.set('readOnly','true');frame.dataset.liveUrl=info.liveUrl;frame.src=url.href;}}else screen.innerHTML=`<div class="feed-placeholder">Session ${escapeHtml(info.status)}</div>`;}}
-function replayEventSummary(event) {
-  const data = event.data && typeof event.data === 'object' ? event.data : {};
-  const detail = data.action?.kind || data.url || data.status || data.outcome || data.level || '';
-  return `${new Date(event.time).toLocaleTimeString()} · ${event.type}${detail ? ` · ${detail}` : ''}`;
-}
+
 function renderReplayTimeline(sessionId) {
   const state = replays.get(sessionId); if (!state?.timeline) return;
-  const events = eventsForSession([...eventRows.values()], sessionId); state.events = events;
-  state.timeline.replaceChildren();
-  if (!events.length) { state.timeline.textContent = 'No session events have arrived yet.'; return; }
-  for (const [index, event] of events.entries()) {
+  const rows = eventsForSession([...eventRows.values()], sessionId);
+  state.events = rows; state.timeline.replaceChildren();
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index], status = eventStatus(row.type, row.data);
     const button = document.createElement('button'); button.type = 'button';
-    button.className = `replay-event${isPlaybackEvent(event) ? ' sync-event' : ''}`;
-    button.dataset.eventIndex = String(index); button.textContent = replayEventSummary(event);
-    if (state.page && state.video) {
-      const offset = eventOffsetSeconds(event, state.page);
-      const length = Math.max(0, (state.page.end_time_ms - state.page.start_time_ms) / 1000);
-      if (offset >= 0 && offset <= length) button.onclick = () => { state.video.currentTime = offset; };
+    button.className = `replay-event ${status} ${isPlaybackEvent(row) ? 'playback-event' : 'sync-event'}`;
+    button.dataset.eventKey = eventKey(row);
+    const detail = extractDetail(row.type, row.data);
+    button.innerHTML = `<span>${fmtTime(row.time)}</span><strong>${escapeHtml(row.type)}</strong>${detail ? `<small>${escapeHtml(detail)}</small>` : ''}`;
+    button.onclick = () => selectEvent(row.eventId || eventKey(row));
+    if (state.page) {
+      const offset = eventOffsetSeconds(row, state.page);
+      if (offset != null) button.onclick = () => { selectEvent(row.eventId || eventKey(row)); seekVideo(sessionId, offset); };
       else button.disabled = true;
     } else button.disabled = true;
     state.timeline.append(button);
->>>>>>> observability
   }
 }
 function highlightReplayEvent(sessionId) {
-  const state = replays.get(sessionId); if (!state?.video || !state.page || !state.events) return;
-  const selected = nearestEventIndex(state.events, state.page, state.video.currentTime);
-  for (const button of state.timeline.querySelectorAll('.replay-event')) {
-    button.classList.toggle('current', Number(button.dataset.eventIndex) === selected);
+  const state = replays.get(sessionId); if (!state?.video || !state.page || !state.events.length) return;
+  const targetTime = state.page.started_at ? new Date(state.page.started_at).getTime() + state.video.currentTime * 1000 : null;
+  const activeIndex = targetTime == null ? -1 : nearestEventIndex(state.events, targetTime);
+  for (const button of state.timeline.querySelectorAll('.replay-event')) button.classList.remove('current');
+  if (activeIndex >= 0) {
+    const active = state.timeline.children[activeIndex];
+    if (active) { active.classList.add('current'); active.scrollIntoView({ block: 'nearest' }); }
   }
 }
+function seekVideo(sessionId, seconds) {
+  const state = replays.get(sessionId); if (!state?.video) return;
+  const target = Math.max(0, Number(seconds) || 0);
+  try { state.video.currentTime = target; void state.video.play().catch(() => {}); }
+  catch { state.video.addEventListener('loadedmetadata', () => { state.video.currentTime = target; }, { once: true }); }
+}
 function attachReplayPage(sessionId, page) {
-  const state = replays.get(sessionId); if (!state) return;
-  state.hls?.destroy(); state.hls = undefined; state.page = page;
-  const video = state.video; video.removeAttribute('src'); video.load();
-  if (video.canPlayType('application/vnd.apple.mpegurl')) video.src = page.playlist_url;
-  else if (window.Hls?.isSupported()) {
-    state.hls = new window.Hls(); state.hls.loadSource(page.playlist_url); state.hls.attachMedia(video);
-  } else state.message.textContent = 'This browser cannot play HLS. The event timeline is still available.';
+  const state = replays.get(sessionId); if (!state?.video) return;
+  state.page = page;
+  if (!page.has_recording || !page.recording_url) {
+    state.message.textContent = page.status_message || 'Recording unavailable for this page.';
+    state.video.hidden = true; renderReplayTimeline(sessionId); return;
+  }
+  state.message.textContent = page.status_message || 'Replay synced with event timeline.';
+  state.video.hidden = false;
+  if (window.Hls?.isSupported()) {
+    state.hls?.destroy();
+    const hls = new window.Hls(); state.hls = hls;
+    hls.loadSource(page.recording_url); hls.attachMedia(state.video);
+  } else {
+    state.video.src = page.recording_url;
+  }
   renderReplayTimeline(sessionId);
 }
 function showReplay(card, sessionId, pages) {
@@ -216,7 +111,6 @@ function showReplay(card, sessionId, pages) {
   const layout = document.createElement('div'); layout.className = 'replay-layout';
   const media = document.createElement('div'); media.className = 'replay-media';
   const message = document.createElement('div'); message.className = 'replay-message';
-  message.textContent = `Provider recording · ${pages.length} page${pages.length === 1 ? '' : 's'}`;
   const video = document.createElement('video'); video.controls = true; video.preload = 'metadata'; video.setAttribute('playsinline', '');
   media.append(message);
   if (pages.length > 1) {
