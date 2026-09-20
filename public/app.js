@@ -526,8 +526,29 @@ if (investSummary) {
     }
   });
 }
-function debounce(fn,ms){let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),ms);};}$('refresh-runs').onclick=loadRuns;$('run-search').addEventListener('input',debounce(loadRuns,250));$('run-status').onchange=loadRuns;$('failure-category').onchange=loadRuns;$('event-log-search').addEventListener('input',debounce(()=>renderEventLog(true),250));$('event-log-prev').onclick=()=>{eventLogOffset=Math.max(0,eventLogOffset-eventLogPageSize);void renderEventLog();};$('event-log-next').onclick=()=>{eventLogOffset+=eventLogPageSize;void renderEventLog();};$('agent-pills').onclick=e=>{const pill=e.target.closest('.agent-pill');if(!pill)return;eventLogFilter=pill.dataset.agent;renderEventLog(true);};
-function renderLive(run){current=run.id;$('status').textContent=run.status.replaceAll('_',' ');document.body.dataset.phase=run.status;$('feed-count').textContent=String(run.sessions.filter(s=>s.status==='running').length).padStart(2,'0');$('empty-monitors').hidden=run.sessions.length>0;$('stop').disabled=!['starting','discovering','planning','running','cancelling'].includes(run.status);$('start').disabled=!$('stop').disabled||run.status==='observing';$('plan').textContent=JSON.stringify(run.plan||{},null,2);if(run.map){$('tree').textContent=JSON.stringify(run.map,null,2);$('download').hidden=false;$('download').href=`/api/runs/${run.id}/map`;}for(const info of run.sessions){let card=cards.get(info.sessionId);if(!card){card=document.createElement('div');card.className='session';card.innerHTML='<div class="monitor-header"><span class="session-label"></span><span class="session-status"></span></div><div class="feed-screen"></div><div class="monitor-footer"><span class="session-identity"></span><span>READ ONLY</span></div>';cards.set(info.sessionId,card);$('sessions').append(card);}card.dataset.status=info.status;card.querySelector('.session-label').textContent=`${info.role} / ${info.agentId}`;card.querySelector('.session-status').textContent=info.status;card.querySelector('.session-identity').textContent=info.sessionId;const screen=card.querySelector('.feed-screen');if(info.status==='running'&&info.liveUrl){let frame=screen.querySelector('iframe');if(!frame){screen.replaceChildren();frame=document.createElement('iframe');frame.title=`Live browser: ${info.agentId}`;screen.append(frame);}if(frame.dataset.liveUrl!==info.liveUrl){const url=new URL(info.liveUrl);url.searchParams.set('readOnly','true');frame.dataset.liveUrl=info.liveUrl;frame.src=url.href;}}else screen.innerHTML=`<div class="feed-placeholder">Session ${escapeHtml(info.status)}</div>`;}}
+const agentMessages = {
+  starting: ['Getting the team ready.', 'Preparing a new run.'],
+  discovering: ['A little look around first.', 'Mapping the paths your website can take.'],
+  planning: ['Finding the right paths.', 'Choosing what matters for your task.'],
+  running: ['Eyes on the browsers.', 'The team is working through its assigned paths.'],
+  cancelling: ['Bringing everyone back.', 'Stopping work and closing browser sessions.'],
+  observing: ['One last look at the evidence.', 'Browsers are closing while the observer finishes.'],
+  succeeded: ['The assigned tasks are complete.', 'Results and observer reports are ready to review.'],
+  completed_with_failures: ['A few things need a closer look.', 'Check the results and their supporting events.'],
+  blocked: ['We need a different path.', 'The run could not find an executable task path.'],
+  failed: ['Something interrupted the run.', 'The event log has the details.'],
+  cancelled: ['Everyone is off duty.', 'This run was cancelled.'],
+  idle: ['All quiet on the browser front.', "Give the team a task. I'll keep an eye on things."]
+};
+function updateLookoutBot(status, detail) {
+  const messageEl = $('agent-message');
+  const detailEl = $('agent-detail');
+  if (!messageEl || !detailEl) return;
+  const pair = agentMessages[status] || ['Keeping an eye on things.', 'Run updates will appear here.'];
+  messageEl.textContent = pair[0];
+  detailEl.textContent = detail || pair[1];
+}
+function renderLive(run){current=run.id;$('status').textContent=run.status.replaceAll('_',' ');document.body.dataset.phase=run.status;updateLookoutBot(run.status);$('feed-count').textContent=String(run.sessions.filter(s=>s.status==='running').length).padStart(2,'0');$('empty-monitors').hidden=run.sessions.length>0;$('stop').disabled=!['starting','discovering','planning','running','cancelling'].includes(run.status);$('start').disabled=!$('stop').disabled||run.status==='observing';$('plan').textContent=JSON.stringify(run.plan||{},null,2);if(run.map){$('tree').textContent=JSON.stringify(run.map,null,2);$('download').hidden=false;$('download').href=`/api/runs/${run.id}/map`;}for(const info of run.sessions){let card=cards.get(info.sessionId);if(!card){card=document.createElement('div');card.className='session';card.innerHTML='<div class="monitor-header"><span class="session-label"></span><span class="session-status"></span></div><div class="feed-screen"></div><div class="monitor-footer"><span class="session-identity"></span><span>READ ONLY</span></div>';cards.set(info.sessionId,card);$('sessions').append(card);}card.dataset.status=info.status;card.querySelector('.session-label').textContent=`${info.role} / ${info.agentId}`;card.querySelector('.session-status').textContent=info.status;card.querySelector('.session-identity').textContent=info.sessionId;const screen=card.querySelector('.feed-screen');if(info.status==='running'&&info.liveUrl){let frame=screen.querySelector('iframe');if(!frame){screen.replaceChildren();frame=document.createElement('iframe');frame.title=`Live browser: ${info.agentId}`;screen.append(frame);}if(frame.dataset.liveUrl!==info.liveUrl){const url=new URL(info.liveUrl);url.searchParams.set('readOnly','true');frame.dataset.liveUrl=info.liveUrl;frame.src=url.href;}}else screen.innerHTML=`<div class="feed-placeholder">Session ${escapeHtml(info.status)}</div>`;}}
 
 function renderReplayTimeline(sessionId) {
   const state = replays.get(sessionId); if (!state?.timeline) return;
@@ -668,6 +689,8 @@ renderSummary = function renderSummaryWithSessions(summary) {
   }
   for (const info of sessions.values()) renderSessionInfo(summary.run_id, info);
   $('empty-monitors').hidden = sessions.size > 0 || cards.size > 0;
+  $('feed-count').textContent = String(sessions.size || cards.size).padStart(2, '0');
+  updateLookoutBot(summary.status);
 };
 function connect(id){
   stream?.close(); stream = new EventSource(`/api/runs/${id}/stream`);
@@ -680,6 +703,12 @@ function connect(id){
         sequence_number: row.seq, metadata: row.data }); renderFlow(); if (eventLogOffset === 0) renderEventLog();
     }
     if (row.sessionId) renderReplayTimeline(row.sessionId);
+    const phase = document.body.dataset.phase;
+    if (['starting', 'discovering', 'planning', 'running', 'observing'].includes(phase)) {
+      const detailText = extractDetail(row.type, row.data);
+      const activity = `${row.agentId || 'agent'}: ${row.type.replace(/^.*\./, '')}${detailText ? ' — ' + detailText : ''}`;
+      updateLookoutBot(phase, activity);
+    }
   });
   stream.addEventListener('investigation', () => void selectRun(id));
   stream.onerror = () => { $('error').textContent = 'Live stream disconnected; reconnecting automatically.'; };
@@ -692,6 +721,7 @@ $('form').addEventListener('submit', async e => {
   e.preventDefault();
   $('error').textContent = '';
   $('start').disabled = true;
+  updateLookoutBot('starting');
   try {
     const file = $('mapFile').files[0],
       data = {

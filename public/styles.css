@@ -34,6 +34,10 @@ main{min-width:0;flex:1;padding:0 38px 40px;max-width:1800px;margin:0 auto;width
 #view-browsers .agent-head{transform-origin:50% 80%;animation:watch-head 10s ease-in-out infinite}
 #view-browsers .agent-face{animation:watch-gaze 10s ease-in-out infinite}
 #view-browsers .arm.right{animation:watch-wave 10s ease-in-out infinite}
+body[data-phase="running"] .antenna i,body[data-phase="discovering"] .antenna i,body[data-phase="planning"] .antenna i{background:#7fe5ff;box-shadow:0 0 16px #4cc9ffaa;animation:pulse-antenna 1.4s ease-in-out infinite alternate}
+body[data-phase="failed"] .antenna i,body[data-phase="completed_with_failures"] .antenna i{background:#ff8f8f;box-shadow:0 0 16px #ff5252aa}
+body[data-phase="succeeded"] .antenna i{background:#8affbf;box-shadow:0 0 16px #22c55eaa}
+@keyframes pulse-antenna{from{transform:scale(1);opacity:.85}to{transform:scale(1.35);opacity:1}}
 #view-browsers .discovery-panels{margin-top:24px}
 @keyframes watch-head{
   0%,12%,86%,100%{transform:translateY(0) rotate(0)}
