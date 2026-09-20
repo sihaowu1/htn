@@ -2,8 +2,11 @@ import { eventKey, eventOffsetSeconds, eventsForSession, isPlaybackEvent,
   nearestEventIndex } from './replay-utils.js';
 
 const $ = id => document.getElementById(id);
-let current, stream, graph = { nodes: [], edges: [] }, selectedEvent;
+let current, stream, graph = { nodes: [], edges: [] }, selectedEvent, currentAgents = [], currentReports = [];
 window.__setTestGraph = g => { graph = g; renderFlow(); };
+window.__setTestInvestigations = items => renderInvestigations(items);
+window.showView = showView;
+window.renderInvestigations = renderInvestigations;
 let eventLogOffset = 0, eventLogPageSize = 50, eventLogFilter = 'all';
 const seen = new Set(), cards = new Map();
 const eventRows = new Map(), replays = new Map();
@@ -23,6 +26,7 @@ function extractDetail(type, data = {}) {
   if (data.outcome) return String(data.outcome).slice(0, 30);
   if (data.error?.message) return String(data.error.message).slice(0, 35);
   if (data.message) return String(data.message).slice(0, 35);
+  if (data.findings) return String(data.findings).slice(0, 35);
   if (data.selector) return String(data.selector).slice(0, 40);
   return '';
 }
@@ -55,6 +59,10 @@ async function selectRun(id) {
   try {
     const [summary,runGraph]=await Promise.all([request(`/api/runs/${id}/summary`),request(`/api/runs/${id}/graph`)]);
     graph=runGraph;
+    currentAgents = summary.agents || [];
+    currentReports = (summary.investigations || []).filter(i => i.report).map(i => i.report);
+    const modal = $('investigation-modal');
+    if (modal) modal.hidden = true;
     renderSummary(summary);
     renderInvestigations(summary.investigations||[]);
     $('status').textContent=String(summary.status).replaceAll('_',' ');
@@ -66,8 +74,156 @@ async function selectRun(id) {
   } catch(error){$('error').textContent=error.message;}
 }
 function renderSummary(s) { const m=s.metrics||{}; const subAgents=filterSubAgents(s.agents); $('run-summary').innerHTML=`<div class="run-title"><div><span class="eyebrow">${escapeHtml(s.workflow_type)}</span><h2>${escapeHtml(s.goal)}</h2><code>${s.run_id}</code></div><span class="outcome ${String(s.status).includes('fail')?'bad':''}">${escapeHtml(s.status)}</span></div><div class="metric-grid compact">${[['Duration',fmtDuration(s.completed_at?new Date(s.completed_at)-new Date(s.created_at):null)],['Agents',subAgents.length],['Events',m.events||0],['Failures',m.failures||0],['Model calls',m.model_calls||0],['Tool calls',m.tool_calls||0],['Retries',m.retries||0],['p95 latency',m.latency_p95_ms?`${Math.round(m.latency_p95_ms)}ms`:'—']].map(([k,v])=>`<div class="metric"><span>${k}</span><strong>${v}</strong></div>`).join('')}</div><div class="stage-strip">${['discovery','planning','execution','observation','completion'].map(stage=>`<span class="${graph.nodes.some(n=>n.type==='workflow.stage.completed'&&n.metadata?.stage===stage)?'done':''}">${stage}</span>`).join('')}</div>`; $('agent-cards').innerHTML=subAgents.map(a=>`<article class="agent-card"><span>${escapeHtml(a.agent_id)}</span><strong>${escapeHtml(a.assigned_task||'coordination')}</strong><dl><dt>Outcome</dt><dd>${escapeHtml(a.outcome||'—')}</dd><dt>Events</dt><dd>${a.event_count}</dd><dt>Retries</dt><dd>${a.retry_count}</dd><dt>Last signal</dt><dd>${escapeHtml(a.last_event||'—')}</dd></dl></article>`).join('')||'<p class="empty-copy">No sub-agent executions recorded for this run.</p>'; const decisions=filterSubAgents(graph.nodes.filter(n=>n.type==='decision.recorded'||n.type==='decision.revised')); $('decisions').innerHTML=decisions.map(n=>`<button data-event="${n.id}" class="decision"><span>${escapeHtml(n.agent_id)}</span><strong>${escapeHtml(n.metadata.decision)}</strong><small>${(n.metadata.assumptions||[]).length?escapeHtml(n.metadata.assumptions.join(' · ')):'Unsupported: no assumptions or evidence recorded'}</small></button>`).join('')||'<p class="empty-copy">No explicit decision summaries were recorded for this run.</p>'; }
-function renderInvestigations(items) { const reports=items.filter(i=>i.report).map(i=>i.report); $('investigation-summary').innerHTML=reports.map(r=>`<article class="failure-report"><header><div><span class="outcome bad">${escapeHtml(r.outcome)}</span><h2>${escapeHtml(r.title||r.summary||r.observed_failure||'Observer finding')}</h2></div><span class="confidence">${escapeHtml(r.likely_cause?.confidence||'—')} confidence</span></header><h3>Observed facts</h3><ol>${r.observed_facts.map(f=>`<li>${escapeHtml(f.statement)} ${f.event_ids.map(id=>`<button class="citation" data-event="${id}">${id.slice(0,8)}</button>`).join(' ')}</li>`).join('')}</ol>${r.likely_cause?`<h3>Likely cause · ${escapeHtml(r.likely_cause.category)}</h3><p>${escapeHtml(r.likely_cause.explanation)}</p>`:''}<h3>Evidence gaps and alternatives</h3><ul>${r.evidence_gaps_and_alternatives.map(g=>`<li>${escapeHtml(g)}</li>`).join('')||'<li>None recorded.</li>'}</ul>${r.reproduction_step?`<h3>Reproduction step</h3><p>${escapeHtml(r.reproduction_step)}</p>`:''}<details><summary>Raw report JSON</summary><pre>${escapeHtml(JSON.stringify(r,null,2))}</pre></details></article>`).join('')||'<p class="empty-copy">No completed investigation report yet. Failure clusters remain visible in the agent flow.</p>'; }
+function getReportAgents(r) {
+  if (!r) return [];
+  const eventIds = new Set([
+    ...(r.earliest_relevant_event_id ? [r.earliest_relevant_event_id] : []),
+    ...(r.trigger_event_id ? [r.trigger_event_id] : []),
+    ...((r.observed_facts || []).flatMap(f => f.event_ids || [])),
+    ...((r.likely_cause?.supporting_event_ids || [])),
+    ...((r.related_event_ids || []))
+  ]);
+  const agents = new Set();
+  for (const id of eventIds) {
+    const node = (graph.nodes || []).find(n => n.id === id);
+    if (node?.agent_id) agents.add(node.agent_id);
+  }
+  if (r.affected_agent_execution_ids) {
+    for (const execId of r.affected_agent_execution_ids) {
+      const node = (graph.nodes || []).find(n => n.agent_execution_id === execId);
+      if (node?.agent_id) agents.add(node.agent_id);
+      const ag = (currentAgents || []).find(a => a.agent_execution_id === execId);
+      if (ag?.agent_id) agents.add(ag.agent_id);
+    }
+  }
+  if (!agents.size && r.recommended_owner && r.recommended_owner !== 'unknown') {
+    agents.add(r.recommended_owner);
+  }
+  return [...agents].filter(a => a !== 'system' && a !== 'crawler').sort(sortAgentLanes);
+}
+
+function showInvestigationModal(idx) {
+  const r = currentReports[idx];
+  if (!r) return;
+  const agents = getReportAgents(r);
+  const isBad = String(r.outcome).includes('FAIL') || String(r.outcome).includes('bad') || r.outcome === 'CONFIRMED_FAILURE';
+  const title = r.title || r.summary || r.observed_failure || 'Observer finding';
+  const facts = r.observed_facts || [];
+  const gaps = r.evidence_gaps_and_alternatives || [];
+  const causeCat = r.likely_cause?.category || '';
+  const causeClass = causeCat ? `cause-${causeCat.toLowerCase().replace(/_/g, '-')}` : '';
+  const conf = r.likely_cause?.confidence || '—';
+
+  $('investigation-modal-content').innerHTML = `
+    <article class="failure-report modal-report">
+      <header>
+        <div>
+          <span class="outcome ${isBad ? 'bad' : ''}">${escapeHtml(r.outcome || 'INCONCLUSIVE')}</span>
+          <h2 id="modal-report-title">${escapeHtml(title)}</h2>
+          ${agents.length ? `<div class="report-agent-meta"><span class="meta-label">Involved agents:</span> ${agents.map(a => `<span class="agent-badge ${agentRoleClass(a)}">${escapeHtml(a)}</span>`).join(' ')}</div>` : ''}
+        </div>
+        <span class="confidence ${conf.toLowerCase()}">${escapeHtml(conf)} confidence</span>
+      </header>
+      <h3>Observed facts</h3>
+      <ol>${facts.length ? facts.map(f => `<li>${escapeHtml(f.statement)} ${(f.event_ids || []).map(id => `<button class="citation" data-event="${id}" title="Jump to event evidence">${id.slice(0, 8)}</button>`).join(' ')}</li>`).join('') : '<li>No facts recorded.</li>'}</ol>
+      ${r.likely_cause ? `<h3>Likely cause · <span class="cause-tag ${causeClass}">${escapeHtml(causeCat)}</span></h3><p>${escapeHtml(r.likely_cause.explanation)}</p>` : ''}
+      <h3>Evidence gaps and alternatives</h3>
+      <ul>${gaps.map(g => `<li>${escapeHtml(g)}</li>`).join('') || '<li>None recorded.</li>'}</ul>
+      ${r.reproduction_step ? `<h3>Reproduction step</h3><p>${escapeHtml(r.reproduction_step)}</p>` : ''}
+      <details><summary>Raw report JSON</summary><pre>${escapeHtml(JSON.stringify(r, null, 2))}</pre></details>
+    </article>
+  `;
+  $('investigation-modal').hidden = false;
+}
+
+function renderInvestigations(items) {
+  const reports = (items || []).map(i => i.report || i).filter(r => r && (r.outcome || r.observed_facts || r.likely_cause || r.title));
+  currentReports = reports;
+  if (!reports.length) {
+    $('investigation-summary').innerHTML = '<p class="empty-copy">No completed investigation report yet. Failure clusters remain visible in the agent flow.</p>';
+    return;
+  }
+  $('investigation-summary').innerHTML = `
+    <div class="investigation-section">
+      <div class="section-bar">
+        <h2><span class="bad-dot"></span> Agent failure investigations <span class="badge-count">${reports.length}</span></h2>
+        <span class="quiet-label">CLICK ROW OR INSPECT TO VIEW FULL DOSSIER</span>
+      </div>
+      <div class="investigation-table-wrap">
+        <table class="investigation-table" aria-label="Failure investigations">
+          <thead>
+            <tr>
+              <th class="col-agent">Agent</th>
+              <th class="col-outcome">Outcome</th>
+              <th class="col-finding">Finding / Insight</th>
+              <th class="col-cause">Likely cause</th>
+              <th class="col-confidence">Confidence</th>
+              <th class="col-facts">Facts</th>
+              <th class="col-action"></th>
+            </tr>
+          </thead>
+          <tbody>
+            ${reports.map((r, idx) => {
+              const agents = getReportAgents(r);
+              const isBad = String(r.outcome).includes('FAIL') || String(r.outcome).includes('bad') || r.outcome === 'CONFIRMED_FAILURE';
+              const title = r.title || r.summary || r.observed_failure || 'Observer finding';
+              const detail = (r.observed_failure && r.observed_failure !== title) ? r.observed_failure : (r.summary && r.summary !== title ? r.summary : '');
+              const causeCat = r.likely_cause?.category || '';
+              const causeClass = causeCat ? `cause-${causeCat.toLowerCase().replace(/_/g, '-')}` : '';
+              const conf = r.likely_cause?.confidence || '—';
+              const factsCount = (r.observed_facts || []).length;
+              return `
+                <tr class="investigation-row" data-report-idx="${idx}" tabindex="0" role="button" aria-label="View report for ${escapeHtml(title)}">
+                  <td class="col-agent">
+                    <div class="agent-badges-cell">
+                      ${agents.length ? agents.map(a => `<span class="agent-badge ${agentRoleClass(a)}">${escapeHtml(a)}</span>`).join('') : '<span class="agent-badge observer">observer</span>'}
+                    </div>
+                  </td>
+                  <td class="col-outcome">
+                    <span class="outcome ${isBad ? 'bad' : ''}">${escapeHtml(r.outcome || 'INCONCLUSIVE')}</span>
+                  </td>
+                  <td class="col-finding">
+                    <strong class="finding-title">${escapeHtml(title)}</strong>
+                    ${detail ? `<small class="finding-detail">${escapeHtml(detail)}</small>` : ''}
+                  </td>
+                  <td class="col-cause">
+                    ${causeCat ? `<span class="cause-tag ${causeClass}">${escapeHtml(causeCat)}</span>` : '<span class="muted">—</span>'}
+                  </td>
+                  <td class="col-confidence">
+                    <span class="confidence-pill conf-${conf.toLowerCase()}">${escapeHtml(conf)}</span>
+                  </td>
+                  <td class="col-facts">
+                    <span class="facts-pill">${factsCount} fact${factsCount === 1 ? '' : 's'}</span>
+                  </td>
+                  <td class="col-action">
+                    <button class="btn-inspect-report" type="button" data-report-idx="${idx}">Inspect ↗</button>
+                  </td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
 function sortAgentLanes(a,b){const order={orchestrator:0,observer:2};const ao=order[a]??1,bo=order[b]??1;if(ao!==bo)return ao-bo;if(a.startsWith('worker-')&&b.startsWith('worker-'))return Number(a.slice(7))-Number(b.slice(7));return a.localeCompare(b);}
+function fmtTimelineTime(t, minTime, durationMs) {
+  const d = new Date(t);
+  const timeStr = fmtTime(d);
+  if (durationMs == null || durationMs <= 0) return timeStr;
+  const elapsedMs = Math.max(0, t - minTime);
+  if (durationMs < 10000) {
+    const s = (elapsedMs / 1000).toFixed(1);
+    return `${timeStr} (+${s}s)`;
+  }
+  if (durationMs < 120000) {
+    const s = Math.round(elapsedMs / 1000);
+    return `${timeStr} (+${s}s)`;
+  }
+  return timeStr;
+}
+
 function renderFlow() {
   const container = $('flow-container'), lanesEl = $('flow-lanes'), axisEl = $('flow-axis'), edgesEl = $('flow-edges'), statsEl = $('flow-stats');
   const nodes = filterSubAgents(graph.nodes);
@@ -77,14 +233,16 @@ function renderFlow() {
     return;
   }
   const laneNames = [...new Set(nodes.map(n => n.agent_id))].sort(sortAgentLanes);
-  const times = nodes.map(n => new Date(n.occurred_at).getTime());
-  const min = Math.min(...times), max = Math.max(...times, min + 1);
-  const durationMs = max - min;
+  const nodeTimes = new Map(nodes.map(n => [n.id, new Date(n.occurred_at).getTime()]));
+  const times = [...nodeTimes.values()];
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times, minTime);
+  const durationMs = maxTime - minTime;
 
   const labelWidth = 130;
   const nodeWidth = 126;
+  const minGap = 20;
   const availableWidth = Math.max(container.clientWidth - labelWidth - 40, 500);
-  const pxPerMs = Math.max(0.015, Math.min(0.06, availableWidth / Math.max(durationMs, 10000)));
 
   statsEl.innerHTML = `<span><strong>${nodes.length}</strong><em>events</em></span><span><strong>${nodes.filter(n => isFailure(n.type, n.metadata)).length}</strong><em>failures</em></span><span><strong>${laneNames.length}</strong><em>agents</em></span><span><strong>${fmtDuration(durationMs)}</strong><em>duration</em></span><span class="quiet-label">SELECT AN EVENT TO OPEN EVIDENCE</span>`;
 
@@ -94,18 +252,23 @@ function renderFlow() {
     if (predecessors.has(e.target)) predecessors.get(e.target).push(e.source);
   }
 
-  const nodesSorted = [...nodes].sort((a, b) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
+  // Base px/ms scaled across available space without artificial clamps
+  const idealPxPerMs = durationMs > 0 ? (availableWidth - 120) / durationMs : 0;
+  const pxPerMs = Math.max(0.02, Math.min(2.0, idealPxPerMs || 0.1));
+
+  const nodesSorted = [...nodes].sort((a, b) => (nodeTimes.get(a.id) - nodeTimes.get(b.id)) || (a.sequence_number - b.sequence_number));
   const laneLastRight = new Map();
   for (const name of laneNames) laneLastRight.set(name, 16);
   const nodeComputedLeft = new Map();
   let maxRight = 400;
 
   for (const n of nodesSorted) {
-    const naturalLeft = 16 + (new Date(n.occurred_at).getTime() - min) * pxPerMs;
+    const t = nodeTimes.get(n.id);
+    const naturalLeft = 16 + (t - minTime) * pxPerMs;
     let left = naturalLeft;
     const prevInLane = laneLastRight.get(n.agent_id) ?? 16;
     if (prevInLane > 16) {
-      left = Math.max(left, prevInLane + 20);
+      left = Math.max(left, prevInLane + minGap);
     }
     for (const predId of predecessors.get(n.id) || []) {
       const predLeft = nodeComputedLeft.get(predId);
@@ -123,14 +286,52 @@ function renderFlow() {
   const laneHeight = 76;
   const totalHeight = laneNames.length * laneHeight;
 
-  axisEl.style.width = `${totalWidth}px`;
-  const ticks = Math.max(4, Math.floor(trackWidth / 150));
-  let marksHtml = '';
-  for (let i = 0; i <= ticks; i++) {
-    const t = min + (max - min) * (i / ticks);
-    const left = 16 + (t - min) * pxPerMs;
-    marksHtml += `<mark style="left:${left}px"><label>${fmtTime(new Date(t))}</label></mark>`;
+  // Build time anchors to map horizontal track coordinate directly to event timestamps
+  const anchors = [];
+  for (const n of nodesSorted) {
+    anchors.push({ x: nodeComputedLeft.get(n.id), t: nodeTimes.get(n.id) });
   }
+  anchors.sort((a, b) => a.x - b.x);
+
+  function getTimeAtX(x) {
+    if (!anchors.length) return minTime;
+    if (x <= anchors[0].x) return anchors[0].t;
+    if (x >= anchors[anchors.length - 1].x) return anchors[anchors.length - 1].t;
+    for (let i = 0; i < anchors.length - 1; i++) {
+      const a1 = anchors[i], a2 = anchors[i + 1];
+      if (x >= a1.x && x <= a2.x) {
+        if (a2.x === a1.x) return a1.t;
+        return a1.t + ((x - a1.x) / (a2.x - a1.x)) * (a2.t - a1.t);
+      }
+    }
+    return maxTime;
+  }
+
+  // Generate evenly spaced timeline marks spanning trackWidth without any overlapping
+  axisEl.style.width = `${totalWidth}px`;
+  const minTickSpacing = 150; // Guaranteed space so time labels never collide
+  const activeSpan = Math.max(maxRight - 16, trackWidth - 60);
+  const numTicks = Math.max(2, Math.min(20, Math.floor(activeSpan / minTickSpacing)));
+  const tickStep = activeSpan / numTicks;
+
+  let marksHtml = '';
+  const tickPositions = [];
+  for (let i = 0; i <= numTicks; i++) {
+    const left = Math.round(16 + i * tickStep);
+    if (left > trackWidth - 30) continue;
+    const t = getTimeAtX(left);
+    const label = fmtTimelineTime(t, minTime, durationMs);
+    marksHtml += `<mark style="left:${left}px"><label>${escapeHtml(label)}</label></mark>`;
+    tickPositions.push(left);
+  }
+
+  // If an event is selected, highlight an active pin on the timeline axis
+  if (selectedEvent && nodeComputedLeft.has(selectedEvent)) {
+    const selLeft = Math.round(nodeComputedLeft.get(selectedEvent) + nodeWidth / 2);
+    const selTime = nodeTimes.get(selectedEvent);
+    marksHtml += `<div class="flow-axis-marker" style="left:${selLeft}px"><span class="marker-pin"></span><span class="marker-label">${escapeHtml(fmtTimelineTime(selTime, minTime, durationMs))}</span></div>`;
+  }
+
   axisEl.innerHTML = `<div class="flow-axis-corner">AGENT / TIME</div><div class="flow-axis-track" style="width:${trackWidth}px;">${marksHtml}</div>`;
 
   lanesEl.style.width = `${totalWidth}px`;
@@ -149,6 +350,10 @@ function renderFlow() {
     const left = nodeComputedLeft.get(n.id) ?? 16;
     const status = eventStatus(n.type, n.metadata);
     const detail = extractDetail(n.type, n.metadata);
+    const t = nodeTimes.get(n.id);
+    const elapsedSec = durationMs > 0 ? ((t - minTime) / 1000).toFixed(1) : '0.0';
+    const timeLabel = durationMs < 10000 && durationMs > 0 ? `${fmtTime(n.occurred_at)} (+${elapsedSec}s)` : fmtTime(n.occurred_at);
+
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = `flow-node ${status === 'failure' ? 'failure' : ''} ${selectedEvent === n.id ? 'selected' : ''}`;
@@ -156,8 +361,8 @@ function renderFlow() {
     btn.dataset.status = status;
     btn.style.left = `${Math.round(left)}px`;
     btn.style.top = '11px';
-    btn.title = `${escapeHtml(n.type)}\n${detail ? escapeHtml(detail) + '\n' : ''}${fmtTime(n.occurred_at)} · seq ${n.sequence_number}`;
-    btn.innerHTML = `<span class="node-type"><span class="status-dot"></span>${escapeHtml(n.type)}</span>${detail ? `<span class="node-detail">${escapeHtml(detail)}</span>` : ''}<span class="node-time">${fmtTime(n.occurred_at)}</span>`;
+    btn.title = `${escapeHtml(n.type)}\n${detail ? escapeHtml(detail) + '\n' : ''}${fmtTime(n.occurred_at)} (+${elapsedSec}s) · seq ${n.sequence_number}`;
+    btn.innerHTML = `<span class="node-type"><span class="status-dot"></span>${escapeHtml(n.type)}</span>${detail ? `<span class="node-detail">${escapeHtml(detail)}</span>` : ''}<span class="node-time">${escapeHtml(timeLabel)}</span>`;
     lane.append(btn);
     nodeButtons.set(n.id, btn);
   }
@@ -199,6 +404,31 @@ function renderFlow() {
   }
 
   edgesEl.innerHTML = '';
+
+  // Draw vertical grid guidelines from timeline marks across all lanes
+  for (const left of tickPositions) {
+    const gridX = labelWidth + left;
+    const gridLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    gridLine.setAttribute('x1', String(gridX));
+    gridLine.setAttribute('y1', '28');
+    gridLine.setAttribute('x2', String(gridX));
+    gridLine.setAttribute('y2', String(totalHeight + 28));
+    gridLine.setAttribute('class', 'flow-grid-line');
+    edgesEl.append(gridLine);
+  }
+
+  // Draw vertical guideline for selected event
+  if (selectedEvent && nodePositions.has(selectedEvent)) {
+    const selPos = nodePositions.get(selectedEvent);
+    const selLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    selLine.setAttribute('x1', String(selPos.x));
+    selLine.setAttribute('y1', '28');
+    selLine.setAttribute('x2', String(selPos.x));
+    selLine.setAttribute('y2', String(totalHeight + 28));
+    selLine.setAttribute('class', 'flow-selected-guide');
+    edgesEl.append(selLine);
+  }
+
   for (const e of graph.edges) {
     const posA = nodePositions.get(e.source);
     const posB = nodePositions.get(e.target);
@@ -242,7 +472,49 @@ async function renderEventLog(reset=false){if(!current)return;if(reset)eventLogO
 $('event-log-body').innerHTML=items.map(e=>{const status=eventStatus(e.event_type,e.metadata);const detail=extractDetail(e.event_type,e.metadata);const highlights=e.search_highlights?.length?`<small class="search-highlights">${escapeHtml(e.search_highlights.join(' · '))}</small>`:'';return `<tr data-event="${e.event_id}" class="${selectedEvent===e.event_id?'selected':''}"><td class="col-time">${fmtTime(e.occurred_at)}</td><td class="col-agent"><span class="agent-badge ${agentRoleClass(e.agent_id)}">${escapeHtml(e.agent_id)}</span></td><td class="col-type"><span class="event-kind ${status}">${escapeHtml(e.event_type)}</span>${highlights}</td><td class="col-detail">${detail?escapeHtml(detail):'—'}</td><td class="col-status"><span class="status-badge ${status}">${status}</span></td><td class="col-seq">${e.sequence_number}</td></tr>`;}).join('')||'<tr><td colspan="6"><p class="empty-copy">No sub-agent events match this filter.</p></td></tr>';
 $('event-log-page').textContent=`${items.length?eventLogOffset+1:0}–${eventLogOffset+items.length} shown`;$('event-log-prev').disabled=eventLogOffset===0;$('event-log-next').disabled=items.length<eventLogPageSize;}catch(error){$('error').textContent=error.message;}}
 function selectEvent(id){selectedEvent=id;renderFlow();renderEventLog();const n=graph.nodes.find(x=>x.id===id);if(!n)return;const antecedents=graph.edges.filter(e=>e.source===id),dependents=graph.edges.filter(e=>e.target===id);$('evidence-content').innerHTML=`<span class="eyebrow">EVENT EVIDENCE</span><h2>${escapeHtml(n.type)}</h2><dl class="evidence-fields"><dt>Event ID</dt><dd><code>${id}</code></dd><dt>Agent</dt><dd>${escapeHtml(n.agent_id)}</dd><dt>Execution</dt><dd><code>${n.agent_execution_id}</code></dd><dt>Session</dt><dd>${escapeHtml(n.session_id||'—')}</dd><dt>Sequence</dt><dd>${n.sequence_number}</dd><dt>Occurred</dt><dd>${escapeHtml(n.occurred_at)}</dd><dt>Ingested</dt><dd>${escapeHtml(n.ingested_at||'—')}</dd><dt>Trace / span</dt><dd>${escapeHtml(n.trace_id||'—')} / ${escapeHtml(n.span_id||'—')}</dd><dt>Schema</dt><dd>${n.schema_version||1}</dd><dt>Causal links</dt><dd>${antecedents.length} antecedent · ${dependents.length} dependent</dd></dl><h3>Metadata</h3><pre>${escapeHtml(JSON.stringify(n.metadata,null,2))}</pre><button id="investigate-event" type="button">Investigate this event</button>`;$('evidence-drawer').hidden=false;$('investigate-event').onclick=async()=>{try{await request(`/api/runs/${current}/investigations`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({eventId:id,signal:'USER_REQUESTED'})});$('investigate-event').textContent='Investigation queued';$('investigate-event').disabled=true;}catch(error){$('error').textContent=error.message;}};}
-document.addEventListener('click',e=>{const target=e.target.closest('[data-event]');if(target&&!target.closest('#run-list'))selectEvent(target.dataset.event);});$('close-drawer').onclick=()=>{$('evidence-drawer').hidden=true;};
+document.addEventListener('click', e => {
+  const target = e.target.closest('[data-event]');
+  if (target && !target.closest('#run-list')) {
+    const modal = $('investigation-modal');
+    if (modal && !modal.hidden) modal.hidden = true;
+    selectEvent(target.dataset.event);
+  }
+});
+$('close-drawer').onclick = () => { $('evidence-drawer').hidden = true; };
+const modalCloseBtn = $('close-investigation-modal');
+if (modalCloseBtn) modalCloseBtn.onclick = () => { $('investigation-modal').hidden = true; };
+const investModal = $('investigation-modal');
+if (investModal) {
+  investModal.addEventListener('click', e => {
+    if (e.target === investModal) investModal.hidden = true;
+  });
+}
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const m = $('investigation-modal');
+    if (m && !m.hidden) m.hidden = true;
+  }
+});
+const investSummary = $('investigation-summary');
+if (investSummary) {
+  investSummary.addEventListener('click', e => {
+    const trigger = e.target.closest('[data-report-idx]');
+    if (trigger) {
+      const idx = Number(trigger.dataset.reportIdx);
+      if (!Number.isNaN(idx)) showInvestigationModal(idx);
+    }
+  });
+  investSummary.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      const trigger = e.target.closest('tr[data-report-idx]');
+      if (trigger) {
+        e.preventDefault();
+        const idx = Number(trigger.dataset.reportIdx);
+        if (!Number.isNaN(idx)) showInvestigationModal(idx);
+      }
+    }
+  });
+}
 function debounce(fn,ms){let timer;return(...args)=>{clearTimeout(timer);timer=setTimeout(()=>fn(...args),ms);};}$('refresh-runs').onclick=loadRuns;$('run-search').addEventListener('input',debounce(loadRuns,250));$('run-status').onchange=loadRuns;$('failure-category').onchange=loadRuns;$('event-log-search').addEventListener('input',debounce(()=>renderEventLog(true),250));$('event-log-prev').onclick=()=>{eventLogOffset=Math.max(0,eventLogOffset-eventLogPageSize);void renderEventLog();};$('event-log-next').onclick=()=>{eventLogOffset+=eventLogPageSize;void renderEventLog();};$('agent-pills').onclick=e=>{const pill=e.target.closest('.agent-pill');if(!pill)return;eventLogFilter=pill.dataset.agent;renderEventLog(true);};
 function renderLive(run){current=run.id;$('status').textContent=run.status.replaceAll('_',' ');document.body.dataset.phase=run.status;$('feed-count').textContent=String(run.sessions.filter(s=>s.status==='running').length).padStart(2,'0');$('empty-monitors').hidden=run.sessions.length>0;$('stop').disabled=!['starting','discovering','planning','running','cancelling'].includes(run.status);$('start').disabled=!$('stop').disabled||run.status==='observing';$('plan').textContent=JSON.stringify(run.plan||{},null,2);if(run.map){$('tree').textContent=JSON.stringify(run.map,null,2);$('download').hidden=false;$('download').href=`/api/runs/${run.id}/map`;}for(const info of run.sessions){let card=cards.get(info.sessionId);if(!card){card=document.createElement('div');card.className='session';card.innerHTML='<div class="monitor-header"><span class="session-label"></span><span class="session-status"></span></div><div class="feed-screen"></div><div class="monitor-footer"><span class="session-identity"></span><span>READ ONLY</span></div>';cards.set(info.sessionId,card);$('sessions').append(card);}card.dataset.status=info.status;card.querySelector('.session-label').textContent=`${info.role} / ${info.agentId}`;card.querySelector('.session-status').textContent=info.status;card.querySelector('.session-identity').textContent=info.sessionId;const screen=card.querySelector('.feed-screen');if(info.status==='running'&&info.liveUrl){let frame=screen.querySelector('iframe');if(!frame){screen.replaceChildren();frame=document.createElement('iframe');frame.title=`Live browser: ${info.agentId}`;screen.append(frame);}if(frame.dataset.liveUrl!==info.liveUrl){const url=new URL(info.liveUrl);url.searchParams.set('readOnly','true');frame.dataset.liveUrl=info.liveUrl;frame.src=url.href;}}else screen.innerHTML=`<div class="feed-placeholder">Session ${escapeHtml(info.status)}</div>`;}}
 
