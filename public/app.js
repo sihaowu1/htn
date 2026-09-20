@@ -136,6 +136,17 @@ function showInvestigationModal(idx) {
   $('investigation-modal').hidden = false;
 }
 
+function renderAgentBadges(agents, max = 2) {
+  if (!agents || !agents.length) return '<span class="agent-badge observer">observer</span>';
+  if (agents.length <= max) {
+    return agents.map(a => `<span class="agent-badge ${agentRoleClass(a)}">${escapeHtml(a)}</span>`).join('');
+  }
+  const shown = agents.slice(0, max);
+  const remaining = agents.slice(max);
+  return shown.map(a => `<span class="agent-badge ${agentRoleClass(a)}">${escapeHtml(a)}</span>`).join('') +
+    `<span class="agent-badge more" title="More agents: ${escapeHtml(remaining.join(', '))}"> (+${remaining.length})</span>`;
+}
+
 function renderInvestigations(items) {
   const reports = (items || []).map(i => i.report || i).filter(r => r && (r.outcome || r.observed_facts || r.likely_cause || r.title));
   currentReports = reports;
@@ -176,7 +187,7 @@ function renderInvestigations(items) {
                 <tr class="investigation-row" data-report-idx="${idx}" tabindex="0" role="button" aria-label="View report for ${escapeHtml(title)}">
                   <td class="col-agent">
                     <div class="agent-badges-cell">
-                      ${agents.length ? agents.map(a => `<span class="agent-badge ${agentRoleClass(a)}">${escapeHtml(a)}</span>`).join('') : '<span class="agent-badge observer">observer</span>'}
+                      ${renderAgentBadges(agents, 2)}
                     </div>
                   </td>
                   <td class="col-outcome">
