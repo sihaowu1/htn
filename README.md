@@ -15,6 +15,81 @@ Your agents. Every action. All in view.
 
 Watchtower turns a website-testing request into coordinated browser-agent runs. Watch agents follow distinct paths in isolated browsers, inspect their actions, and read failure reports backed by logged evidence. Successful and failed runs leave a record for debugging and future model training.
 
+## Key Features
+
+### Task-Scoped Exploration
+
+Describe what to test and Watchtower explores only what matters.
+
+- **Goal-Focused Discovery**: A request to test search stops at search results, even if the site also offers checkout.
+- **Flow Maps**: Discovered states, transitions, and paths are saved as a reusable JSON map you can download, correct, and replay.
+- **Explicit Coverage Limits**: Unexplored branches, unsupported interactions, and replay failures are recorded rather than hidden.
+
+### Parallel Browser Agents
+
+Three workers run distinct paths at once.
+
+- **Isolated Sessions**: Each worker starts from the same entry point in its own cloud browser with no shared storage.
+- **Path Diversity**: The best goal-reaching route is kept, then the rest maximize early behavioral divergence, including exploratory branches.
+- **Step-by-Step Execution**: Workers receive one validated instruction at a time and verify each resulting state before moving on.
+- **Live Viewing**: Watch every worker browser from the Control Room.
+
+### Observation & Evidence
+
+Know what your agents actually did.
+
+- **Global Event Log**: Actions, model calls, browser events, errors, and outcomes are written to `logs/events.jsonl`, correlated by run, agent, and session IDs.
+- **Evidence-Backed Reports**: The observer cites real log events and separates observed failures from suspected causes.
+- **Training Data**: Successful and failed runs leave a record for debugging your site and improving future models.
+
+## Tech Stack
+
+| Layer | Technologies |
+|-------|-------------|
+| Runtime | Node.js 22+, TypeScript |
+| Backend | Express, server-sent event stream |
+| Frontend | Plain HTML, CSS, and JavaScript |
+| Discovery browser | Local Playwright Chromium |
+| Worker browsers | Browserbase cloud sessions, driven via Playwright and CDP |
+| AI models | OpenAI (Responses API for discovery, Chat Completions for workers and observer) |
+| Telemetry | Sentry, serialized local JSONL event log |
+| Tunnel | ngrok, to expose the local target to cloud workers |
+
+## How It Works
+
+### Run workflow
+
+```
+Task + target URL
+  -> Discovery crawls the local site, keeping only goal-relevant interactions
+  -> Flow map of states, transitions, and paths (cached or imported)
+  -> Deterministic orchestrator selects three paths
+  -> Three workers execute in isolated Browserbase sessions
+  -> Global observer analyzes the event log
+  -> Results, events, and evidence-backed report
+```
+
+### Discovery
+
+```
+Local site served on an ephemeral port
+  -> Local Chromium renders and navigates depth-first
+  -> Model keeps goal-relevant branches and flags the goal state
+  -> URLs rewritten onto the public tunnel address
+  -> Flow map saved to logs/tree_demo.json
+```
+
+### Execution and observation
+
+```
+Selected path
+  -> Worker receives one destination instruction
+  -> Validated action runs in the live browser
+  -> Resulting state verified against the map
+  -> Every step logged with run, agent, and session IDs
+  -> Observer cites those events in its report
+```
+
 ## Quick Start
 
 You'll need **Node.js 22+**, OpenAI and Browserbase credentials, a Sentry DSN, and a tunnel such as ngrok.
@@ -58,8 +133,6 @@ Fill in the credentials below. Keep `.env` local. Change model settings if neede
 Although `.env.example` labels Sentry optional, the current server requires `SENTRY_DSN` to start a run. Events are also saved locally in `logs/events.jsonl`.
 
 ### 3. Serve the target website
-
-The included `local_website/` contains a mock Best Buy store. Start it in a separate terminal from the repository root:
 
 ```sh
 npx --yes http-server local_website -a 127.0.0.1 -p 8080
